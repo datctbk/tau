@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Generator
 from typing import Any
 
 from tau.config import TauConfig
@@ -49,7 +50,7 @@ class GoogleProvider:
         messages: list[Message],
         tools: list[ToolDefinition],
         stream: bool = True,
-    ) -> ProviderResponse:
+    ) -> ProviderResponse | Generator:
         gtypes = self._gtypes
         system_prompt, history, last_user = _split_messages(messages)
 
@@ -77,7 +78,7 @@ class GoogleProvider:
         )
         return _parse_google_response(response)
 
-    def _chat_stream(self, contents, gen_config) -> ProviderResponse:
+    def _chat_stream(self, contents, gen_config) -> Generator:
         content_parts: list[str] = []
         last_response = None
 

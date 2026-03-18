@@ -1,8 +1,8 @@
 """Base provider protocol."""
-
 from __future__ import annotations
 
-from typing import Iterator, Protocol, runtime_checkable
+from collections.abc import Generator
+from typing import Protocol, runtime_checkable
 
 from tau.core.types import Message, ProviderResponse, ToolDefinition
 
@@ -16,5 +16,5 @@ class BaseProvider(Protocol):
         self,
         messages: list[Message],
         tools: list[ToolDefinition],
-        stream: bool = False,
-    ) -> ProviderResponse: ...
+        stream: bool = True,
+    ) -> ProviderResponse | Generator: ...

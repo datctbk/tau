@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 import shlex
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from tau.core.types import ToolDefinition, ToolParameter
 
@@ -18,11 +18,29 @@ _shell_config: dict[str, Any] = {
     "allowed_commands": [],
 }
 
+# Pluggable confirmation hook — CLI replaces this so it can flush the
+# in-progress stream to stdout before showing the prompt.
+_confirm_hook: Callable[[str], bool] | None = None
 
-def configure_shell(require_confirmation: bool, timeout: int, allowed_commands: list[str]) -> None:
+
+def configure_shell(
+    require_confirmation: bool,
+    timeout: int,
+    allowed_commands: list[str],
+    confirm_hook: Callable[[str], bool] | None = None,
+) -> None:
     _shell_config["require_confirmation"] = require_confirmation
     _shell_config["timeout"] = timeout
     _shell_config["allowed_commands"] = allowed_commands
+    global _confirm_hook
+    _confirm_hook = confirm_hook
+
+
+def _default_confirm(command: str) -> bool:
+    import sys
+    sys.stderr.write(f"\n  ⚠  tau wants to run:\n\n    {command}\n\n  Allow? [y/N] ")
+    sys.stderr.flush()
+    return sys.stdin.readline().strip().lower() in ("y", "yes")
 
 
 def _is_allowed(command: str) -> bool:
@@ -33,20 +51,13 @@ def _is_allowed(command: str) -> bool:
     return any(first_token.startswith(a) for a in allowed)
 
 
-def _ask_confirmation(command: str) -> bool:
-    import sys
-    sys.stderr.write(f"\n  ⚠  tau wants to run:\n\n    {command}\n\n  Allow? [y/N] ")
-    sys.stderr.flush()
-    answer = sys.stdin.readline().strip().lower()
-    return answer in ("y", "yes")
-
-
 def run_bash(command: str, workdir: str = ".") -> str:
     if not _is_allowed(command):
         return f"Error: command not in allowlist — {command!r}"
 
     if _shell_config["require_confirmation"]:
-        if not _ask_confirmation(command):
+        confirm = _confirm_hook if _confirm_hook is not None else _default_confirm
+        if not confirm(command):
             return "Cancelled by user."
 
     logger.debug("run_bash: %s", command)

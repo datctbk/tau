@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Generator
 from typing import Any
 
 import httpx
@@ -45,7 +46,7 @@ class OllamaProvider:
         messages: list[Message],
         tools: list[ToolDefinition],
         stream: bool = True,
-    ) -> ProviderResponse:
+    ) -> ProviderResponse | Generator:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [_to_ollama_message(m) for m in messages],
@@ -69,9 +70,9 @@ class OllamaProvider:
         data = resp.json()
         return _parse_ollama_response(data)
 
-    def _chat_stream(self, payload: dict[str, Any]) -> ProviderResponse:
+    def _chat_stream(self, payload: dict[str, Any]) -> Generator:
         content_parts: list[str] = []
-        tool_calls_raw: list[dict] = []  # collected from intermediate chunks
+        tool_calls_raw: list[dict] = []
         final_data: dict[str, Any] = {}
 
         with self._client.stream("POST", f"{self._base_url}/api/chat", json=payload) as resp:
@@ -86,11 +87,15 @@ class OllamaProvider:
 
                 msg = chunk.get("message", {})
 
-                # Collect tool calls from any chunk (they arrive before done=True)
                 if msg.get("tool_calls"):
                     tool_calls_raw.extend(msg["tool_calls"])
 
-                # Only stream visible content — skip thinking tokens
+                # Thinking tokens — yield with is_thinking=True, never buffer
+                thinking = msg.get("thinking", "")
+                if thinking:
+                    yield TextDelta(text=thinking, is_thinking=True)  # type: ignore[misc]
+
+                # Visible content
                 delta = msg.get("content", "")
                 if delta:
                     content_parts.append(delta)
@@ -99,7 +104,6 @@ class OllamaProvider:
                 if chunk.get("done"):
                     final_data = chunk
 
-        # Merge accumulated tool calls into the final message
         final_data.setdefault("message", {})
         final_data["message"]["content"] = "".join(content_parts)
         if tool_calls_raw:

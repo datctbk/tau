@@ -51,7 +51,7 @@ class OpenAIProvider:
         messages: list[Message],
         tools: list[ToolDefinition],
         stream: bool = True,
-    ) -> ProviderResponse:
+    ) -> ProviderResponse | Generator:
         oai_messages = [_to_oai_message(m) for m in messages]
         oai_tools = [_to_oai_tool(t) for t in tools] if tools else []
 
@@ -97,7 +97,7 @@ class OpenAIProvider:
         return ProviderResponse(content=msg.content, tool_calls=tool_calls,
                                 stop_reason=stop_reason, usage=usage)
 
-    def _chat_stream(self, kwargs: dict[str, Any]) -> ProviderResponse:
+    def _chat_stream(self, kwargs: dict[str, Any]) -> Generator:
         # Accumulators
         content_parts: list[str] = []
         # tool call accumulators: index → {id, name, arguments}

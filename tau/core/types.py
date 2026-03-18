@@ -161,6 +161,7 @@ class TextChunk:
 class TextDelta:
     """A single streaming token/chunk from the LLM (not yet complete)."""
     text: str
+    is_thinking: bool = False
 
 
 @dataclass

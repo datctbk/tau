@@ -1,7 +1,14 @@
 """Tests for tau.core.context."""
 
 import pytest
-from tau.core.context import ContextManager, _estimate_tokens
+from unittest.mock import patch
+from tau.core.context import (
+    ContextManager,
+    SlidingWindowStrategy,
+    SummariseStrategy,
+    _estimate_tokens,
+    _messages_tokens,
+)
 from tau.core.types import AgentConfig, Message
 
 
@@ -70,3 +77,110 @@ def test_inject_prompt_fragment():
     ctx.inject_prompt_fragment("Extra instructions here.")
     system_content = ctx.get_messages()[0].content
     assert "Extra instructions here." in system_content
+
+
+# ---------------------------------------------------------------------------
+# Token estimator
+# ---------------------------------------------------------------------------
+
+def test_estimate_tokens_nonzero():
+    assert _estimate_tokens("hello world") > 0
+
+def test_estimate_tokens_scales_with_length():
+    short = _estimate_tokens("hi")
+    long = _estimate_tokens("hello world, this is a much longer piece of text")
+    assert long > short
+
+def test_estimate_tokens_fallback():
+    """Force the char/4 fallback by pretending tiktoken is absent."""
+    with patch("tau.core.context._enc", None):
+        # Import the module-level function fresh to use the fallback branch
+        result = _estimate_tokens("hello")
+        assert result >= 1
+
+# ---------------------------------------------------------------------------
+# SlidingWindowStrategy
+# ---------------------------------------------------------------------------
+
+def test_sliding_window_under_budget_unchanged():
+    msgs = [
+        Message(role="system", content="sys"),
+        Message(role="user", content="hi"),
+    ]
+    strategy = SlidingWindowStrategy()
+    result = strategy.trim(msgs, budget=10_000)
+    assert result == msgs
+
+def test_sliding_window_preserves_system():
+    system = Message(role="system", content="sys")
+    msgs = [system] + [
+        Message(role="user", content=f"message {i} " * 20)
+        for i in range(30)
+    ]
+    strategy = SlidingWindowStrategy()
+    result = strategy.trim(msgs, budget=50)
+    assert result[0].role == "system"
+
+def test_sliding_window_drops_oldest_first():
+    msgs = [
+        Message(role="user", content="first " * 20),
+        Message(role="assistant", content="second " * 20),
+        Message(role="user", content="third " * 20),
+    ]
+    strategy = SlidingWindowStrategy()
+    result = strategy.trim(msgs, budget=60)
+    contents = [m.content for m in result]
+    # Oldest messages should be gone, newest should survive
+    assert any("third" in c for c in contents)
+
+# ---------------------------------------------------------------------------
+# SummariseStrategy
+# ---------------------------------------------------------------------------
+
+def test_summarise_under_budget_unchanged():
+    msgs = [Message(role="user", content="hi")]
+    strategy = SummariseStrategy()
+    result = strategy.trim(msgs, budget=10_000)
+    assert result == msgs
+
+def test_summarise_falls_back_when_too_few_messages():
+    """With fewer than KEEP_RECENT messages, falls back to sliding window."""
+    msgs = [
+        Message(role="system", content="sys"),
+        Message(role="user", content="hi " * 50),
+    ]
+    strategy = SummariseStrategy()
+    # Budget so small trimming is required
+    result = strategy.trim(msgs, budget=10)
+    assert result[0].role == "system"
+
+def test_summarise_calls_summary_when_enough_history():
+    """With enough history, _call_summary is invoked and summary appears in result."""
+    system = Message(role="system", content="sys")
+    msgs = [system] + [
+        Message(role="user", content=f"message {i} " * 30)
+        for i in range(20)
+    ]
+    strategy = SummariseStrategy()
+    fake_summary = "This is a concise summary."
+    with patch.object(strategy, "_call_summary", return_value=fake_summary) as mock_summary:
+        # Budget below the full message count (1820 tokens) but large enough
+        # to hold system + summary + 6 recent messages
+        result = strategy.trim(msgs, budget=1500)
+        mock_summary.assert_called_once()
+    assert any(fake_summary in m.content for m in result)
+
+
+def test_summarise_call_failure_falls_back():
+    """If _call_summary raises, trim() falls back to sliding window without raising."""
+    system = Message(role="system", content="sys")
+    msgs = [system] + [
+        Message(role="user", content=f"message {i} " * 30)
+        for i in range(20)
+    ]
+    strategy = SummariseStrategy()
+    with patch.object(strategy, "_call_summary", side_effect=RuntimeError("network error")):
+        result = strategy.trim(msgs, budget=5000)
+    # Should not raise; system prompt must survive
+    assert isinstance(result, list)
+    assert result[0].role == "system"

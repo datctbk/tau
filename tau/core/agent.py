@@ -108,11 +108,8 @@ class Agent:
                     tool_call_id=result.tool_call_id,
                     name=call.name,
                 ))
-
-            if response.stop_reason == "end_turn":
-                yield TurnComplete(usage=response.usage)
-                self._persist()
-                return
+            # Always loop back — the model must see tool results before finishing
+            continue
 
         yield ErrorEvent(message=f"Reached max_turns limit ({self._config.max_turns}).")
         self._persist()
@@ -137,6 +134,7 @@ class Agent:
                     response = item
         except Exception as exc:  # noqa: BLE001
             logger.exception("Error consuming provider stream")
+            yield ErrorEvent(message=f"Stream error: {exc}")
             return None, had_deltas
 
         return response, had_deltas

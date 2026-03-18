@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
+from typing import Callable
 
 import click
 from rich.console import Console
@@ -33,7 +34,8 @@ from tau.providers import get_provider
 from tau.skills import SkillLoader
 from tau.tools import register_builtin_tools
 from tau.tools.fs import configure_fs
-from tau.tools.shell import configure_shell
+from tau.tools.shell import configure_shell, _default_confirm
+from tau.core.context import configure_context
 
 console = Console()
 err_console = Console(stderr=True)
@@ -66,7 +68,7 @@ _AGENT_OPTIONS = [
     click.option("--session-name", default=None, help="Name for the new session."),
     click.option("--no-confirm", is_flag=True, default=False, help="Disable shell confirmation prompts."),
     click.option("--workspace", "-w", default=".", show_default=True, help="Workspace root path."),
-    click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging."),
+    click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging and show model thinking tokens."),
 ]
 
 
@@ -86,6 +88,7 @@ def _build_agent(
     session_manager: SessionManager,
     session_name: str | None,
     resume_id: str | None,
+    confirm_hook: Callable[[str], bool] | None = None,
 ) -> Agent:
     registry = ToolRegistry()
     register_builtin_tools(registry)
@@ -94,8 +97,13 @@ def _build_agent(
         require_confirmation=tau_config.shell.require_confirmation,
         timeout=tau_config.shell.timeout,
         allowed_commands=tau_config.shell.allowed_commands,
+        confirm_hook=confirm_hook,
     )
     configure_fs(workspace_root=agent_config.workspace_root)
+    configure_context(
+        ollama_base_url=tau_config.ollama.base_url,
+        ollama_model=agent_config.model,
+    )
 
     context = ContextManager(agent_config)
 
@@ -154,7 +162,7 @@ def _make_agent_config(
 # Renderer
 # ---------------------------------------------------------------------------
 
-def _render_events(agent: Agent, user_input: str) -> None:
+def _render_events(agent: Agent, user_input: str, verbose: bool = False) -> None:
     stream_buffer: list[str] = []
     is_streaming = False
 
@@ -168,18 +176,28 @@ def _render_events(agent: Agent, user_input: str) -> None:
             sys.stdout.flush()
         stream_buffer.clear()
 
-    for event in agent.run(user_input):
+    def _confirm_with_flush(command: str) -> bool:
+        _flush_stream(end_line=True)
+        return _default_confirm(command)
 
+    # Override the module-level confirm hook now that _flush_stream exists
+    from tau.tools import shell as _shell_mod
+    _shell_mod._confirm_hook = _confirm_with_flush
+
+    for event in agent.run(user_input):
         if isinstance(event, TextDelta):
+            if event.is_thinking:
+                if verbose:
+                    sys.stdout.write(f"\x1b[2m{event.text}\x1b[0m")
+                    sys.stdout.flush()
+                continue   # never buffer thinking tokens
             if not is_streaming:
                 is_streaming = True
             stream_buffer.append(event.text)
-            # Write directly to stdout — no buffering, no TTY detection
             sys.stdout.write(event.text)
             sys.stdout.flush()
 
         elif isinstance(event, TextChunk):
-            # Blocking mode — render directly as Markdown
             _flush_stream(end_line=False)
             console.print(Markdown(event.text))
 
@@ -231,7 +249,7 @@ def _render_events(agent: Agent, user_input: str) -> None:
 # REPL
 # ---------------------------------------------------------------------------
 
-def _repl(agent: Agent, agent_config: AgentConfig) -> None:
+def _repl(agent: Agent, agent_config: AgentConfig, verbose: bool = False) -> None:
     console.print(
         Panel(
             Text.assemble(
@@ -263,7 +281,7 @@ def _repl(agent: Agent, agent_config: AgentConfig) -> None:
             console.print("[dim]Goodbye.[/dim]")
             break
         console.print(Rule(style="dim"))
-        _render_events(agent, stripped)
+        _render_events(agent, stripped, verbose)
 
 
 def _tau_version() -> str:
@@ -324,9 +342,9 @@ def run_cmd(
     )
 
     if prompt:
-        _render_events(agent, prompt)
+        _render_events(agent, prompt, verbose)
     else:
-        _repl(agent, agent_config)
+        _repl(agent, agent_config, verbose)
 
 
 # ---------------------------------------------------------------------------
