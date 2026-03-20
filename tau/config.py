@@ -64,6 +64,12 @@ class SkillsConfig(BaseSettings):
     disabled: list[str] = []
 
 
+class ExtensionsConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAU_EXTENSIONS_")
+    paths: list[str] = []
+    disabled: list[str] = []
+
+
 # ---------------------------------------------------------------------------
 # Root config
 # ---------------------------------------------------------------------------
@@ -90,6 +96,7 @@ class TauConfig(BaseSettings):
     # tool / skill sub-configs
     shell: ShellToolConfig = ShellToolConfig()
     skills: SkillsConfig = SkillsConfig()
+    extensions: ExtensionsConfig = ExtensionsConfig()
 
     @field_validator("trim_strategy")
     @classmethod
@@ -117,29 +124,24 @@ def _load_toml(path: Path) -> dict[str, Any]:
 def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
     """Load config from TOML, then overlay env vars."""
     raw = _load_toml(config_path)
-
-    # Flatten nested TOML sections into pydantic sub-models
     init: dict[str, Any] = {}
-
     defaults = raw.get("defaults", {})
     init.update(defaults)
-
     for section in ("openai", "google", "ollama"):
         if section in raw.get("providers", {}):
             init[section] = raw["providers"][section]
-
     if "shell" in raw.get("tools", {}):
         init["shell"] = raw["tools"]["shell"]
-
     if "skills" in raw:
         init["skills"] = raw["skills"]
-
+    if "extensions" in raw:
+        init["extensions"] = raw["extensions"]
     return TauConfig(**init)
 
 
 def ensure_tau_home() -> None:
     """Create ~/.tau and its sub-directories if they don't exist."""
-    for subdir in ("", "sessions", "skills"):
+    for subdir in ("", "sessions", "skills", "extensions"):
         (TAU_HOME / subdir).mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(

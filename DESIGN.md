@@ -1,5 +1,4 @@
 # tau — Design Document
-
 > A minimal, extensible CLI coding agent with multi-provider LLM support and tool use.
 
 ---
@@ -11,44 +10,52 @@
 | **Minimal core** | The core does one thing: run an agent loop (LLM ↔ tools). No bloat. |
 | **Provider-agnostic** | Swap Google, OpenAI, Ollama, or any future provider via a unified interface. |
 | **Tool-first** | The agent reasons by calling tools. Tools are first-class, declarative, and sandboxed. |
-| **Extensible via skills** | Skills are bundles of tools + optional prompt fragments, loaded at runtime. |
-| **Session-aware** | Conversations have identity, history, and can be resumed. |
-| **CLI-native** | Designed for the terminal; no GUI, no server required to run. |
+| **Extensible** | Skills (YAML + tools.py) and the new Extension system let anyone add tools, slash commands, event hooks, and prompt fragments at runtime. |
+| **Session-aware** | Conversations have identity, history, branching, and can be resumed. |
+| **CLI-native** | Designed for the terminal; no GUI, no server required. |
+| **Resilient** | Auto-compaction, auto-retry with exponential backoff, and mid-stream steering make the agent robust in real use. |
 
 ---
 
 ## 2. High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                          tau CLI                            │
-│  (entry point, arg parsing, REPL / single-shot mode)        │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-          ┌──────────────▼──────────────┐
-          │         Agent Core          │
-          │  - agent loop               │
-          │  - context manager          │
-          │  - session manager          │
-          │  - tool dispatcher          │
-          └──┬──────────────────┬───────┘
-             │                  │
-   ┌──────────▼──────┐   ┌──────▼──────────┐
-   │  Provider Layer │   │   Tool Registry  │
-   │  (LLM adapters) │   │  (built-in +     │
-   │                 │   │   skill tools)   │
-   │  - openai       │   │                  │
-   │  - google       │   │  - fs (read/     │
-   │  - ollama       │   │    write/edit)   │
-   │  - base         │   │  - shell (bash)  │
-   └─────────────────┘   │  - search        │
-                         └──────────────────┘
-                                  │
-                     ┌────────────▼────────────┐
-                     │       Skill Loader       │
-                     │  (discovers & registers  │
-                     │   skills at startup)     │
-                     └─────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                            tau CLI                               │
+│  (Click entry point · REPL · single-shot · slash commands)       │
+└──────────────────────┬───────────────────────────────────────────┘
+                       │  Events (stream)
+          ┌────────────▼────────────┐
+          │        Agent Core       │
+          │  ┌─────────────────┐    │
+          │  │   agent loop    │    │
+          │  │  + retry        │    │
+          │  │  + compaction   │    │
+          │  │  + steering     │    │
+          │  └────────┬────────┘    │
+          │           │             │
+          │  ┌────────▼────────┐    │
+          │  │ ContextManager  │    │
+          │  │ (trim/compact)  │    │
+          │  └─────────────────┘    │
+          │  ┌─────────────────┐    │
+          │  │ SessionManager  │    │
+          │  │ (persist/fork)   │    │
+          │  └─────────────────┘    │
+          └──┬──────────────────────┘
+             │
+   ┌──────────▼──────┐   ┌─────────────────┐   ┌─────────────────┐
+   │ Provider Layer  │   │  Tool Registry  │   │ExtensionRegistry│
+   │ (LLM adapters)  │   │ built-in tools  │   │ tools           │
+   │                 │   │ + skill tools   │   │ slash commands  │
+   │ openai          │   │ + ext tools     │   │ event hooks     │
+   │ google          │   │                 │   │ prompt frags    │
+   │ ollama          │   └─────────────────┘   └─────────────────┘
+   └─────────────────┘           │                      │
+                        ┌────────▼──────────────────────▼────────┐
+                        │         Skill Loader  (legacy)          │
+                        │  discovers skills/ dirs at startup      │
+                        └─────────────────────────────────────────┘
 ```
 
 ---
@@ -57,43 +64,59 @@
 
 ```
 tau/
-├── tau/                        # main package
+├── tau/
 │   ├── __init__.py
-│   ├── cli.py                  # entry point (Click / argparse)
+│   ├── cli.py                   # Click entry point, REPL, renderer
+│   ├── config.py                # config loading (~/.tau/config.toml)
 │   │
-│   ├── core/                   # ── CORE MODULE ──────────────────
-│   │   ├── __init__.py
-│   │   ├── agent.py            # agent loop
-│   │   ├── context.py          # context / token window management
-│   │   ├── session.py          # session persistence & resume
-│   │   ├── tool_registry.py    # tool registration & dispatch
-│   │   └── types.py            # shared dataclasses / protocols
+│   ├── core/
+│   │   ├── agent.py             # agent loop (retry, compaction, steering)
+│   │   ├── context.py           # token window, trim strategies, Compactor
+│   │   ├── extension.py         # Extension base, ExtensionContext, ExtensionRegistry
+│   │   ├── session.py           # session persistence, fork/branch
+│   │   ├── steering.py          # SteeringChannel (steer + follow-up queue)
+│   │   ├── tool_registry.py     # registration + dispatch
+│   │   └── types.py             # all shared dataclasses / events
 │   │
-│   ├── providers/              # ── PROVIDER MODULE ──────────────
-│   │   ├── __init__.py
-│   │   ├── base.py             # BaseProvider protocol / ABC
+│   ├── providers/
+│   │   ├── base.py              # BaseProvider protocol
 │   │   ├── openai_provider.py
 │   │   ├── google_provider.py
 │   │   └── ollama_provider.py
 │   │
-│   ├── tools/                  # ── BUILT-IN TOOLS ───────────────
-│   │   ├── __init__.py
-│   │   ├── fs.py               # read_file, write_file, edit_file, list_dir
-│   │   └── shell.py            # run_bash
+│   ├── tools/
+│   │   ├── fs.py                # read/write/edit/list/search
+│   │   └── shell.py             # run_bash
 │   │
-│   ├── skills/                 # ── SKILLS (extensible) ──────────
-│   │   ├── __init__.py         # skill loader
+│   ├── skills/                  # legacy skill system (YAML + tools.py)
+│   │   ├── __init__.py          # SkillLoader
 │   │   └── example_skill/
-│   │       ├── __init__.py
-│   │       ├── skill.yaml      # metadata + system prompt fragment
-│   │       └── tools.py        # skill-specific tools
 │   │
-│   └── config.py               # config loading (~/.tau/config.toml)
+│   └── extensions/              # built-in extension system
+│       ├── __init__.py
+│       ├── word_count.py        # reference: tool + /wc slash command
+│       └── pretty_json.py       # reference: tool + /json + event hook
 │
 ├── tests/
+│   ├── test_agent.py
+│   ├── test_compaction.py
+│   ├── test_context.py
+│   ├── test_extensions.py       # 72 tests for the extension system
+│   ├── test_fs_tools.py
+│   ├── test_retry.py
+│   ├── test_session.py
+│   └── test_steering.py
+│
 ├── pyproject.toml
 ├── README.md
-└── DESIGN.md                   # this file
+└── DESIGN.md
+```
+
+User extension directories (searched in order):
+```
+tau/extensions/          ← built-ins (shipped with tau)
+~/.tau/extensions/       ← user-installed
+[extensions] paths = []  ← extra paths from config.toml
 ```
 
 ---
@@ -102,130 +125,217 @@ tau/
 
 ### 4.1 `core/types.py` — Shared Types
 
+All types are plain dataclasses — no framework coupling.
+
+**Messages & tools**
 ```
-Message          role (system|user|assistant|tool), content, tool_call_id
-ToolDefinition   name, description, parameters (JSON Schema), handler fn
-ToolCall         id, name, arguments (dict)
-ToolResult       tool_call_id, content, is_error
-AgentConfig      provider, model, max_tokens, max_turns, system_prompt
+Message            role, content, tool_call_id, tool_calls, name
+ToolDefinition     name, description, parameters (JSON Schema), handler fn
+ToolCall           id, name, arguments
+ToolResult         tool_call_id, content, is_error
+ToolParameter      type, description, enum, required
 ```
 
-All types are plain dataclasses or `TypedDict`s — no framework coupling.
+**Agent config**
+```
+AgentConfig        provider, model, max_tokens, max_turns, system_prompt,
+                   trim_strategy, workspace_root,
+                   compaction_enabled, compaction_threshold,
+                   retry_enabled, retry_max_attempts, retry_base_delay
+```
+
+**Extension types**
+```
+ExtensionManifest  name, version, description, author, system_prompt_fragment
+SlashCommand       name, description, usage
+ExtensionLoadError extension_name, error   (emitted as an Event)
+```
+
+**Event stream** — everything yielded by `agent.run()`:
+```
+TextDelta          streaming token (is_thinking flag for CoT models)
+TextChunk          complete assistant text block
+ToolCallEvent      a tool the LLM wants to call
+ToolResultEvent    the result returned to the LLM
+TurnComplete       end of one turn + TokenUsage
+CompactionEvent    stage=start|end, token counts, summary
+RetryEvent         attempt, max_attempts, delay, error
+SteerEvent         new_input, discarded_tokens
+ExtensionLoadError extension_name, error
+ErrorEvent         message
+```
 
 ---
 
-### 4.2 `core/context.py` — Context Manager
+### 4.2 `core/context.py` — Context Manager + Compactor
 
-Responsibilities:
-- Maintain the **message list** for the current turn.
-- Enforce a **token budget** (sliding window or summarisation strategy).
-- Inject **system prompt** + skill prompt fragments.
-- Provide `add_message()`, `get_messages()`, `trim()`, `snapshot()`.
+**ContextManager** responsibilities:
+- Maintain the **message list**.
+- Enforce a **token budget** (sliding window or summarisation).
+- Inject system prompt + skill/extension prompt fragments.
+- `inject_prompt_fragment()` appends to the system message.
 
-Trimming strategies (pluggable):
+**Compactor** responsibilities:
+- `should_compact(messages)` — true when token usage ≥ threshold × max_tokens.
+- `compact(messages, provider)` — calls the LLM for a rolling summary, keeps the last N messages verbatim, returns a trimmed list + `CompactionEntry`.
+- `is_overflow_error(msg)` — detects context-length errors for overflow recovery.
+
+Trimming strategies:
+
 | Strategy | Behaviour |
 |----------|-----------|
 | `sliding_window` | Drop oldest non-system messages when over budget |
 | `summarise` | Ask the LLM to summarise old messages, replace with summary |
-
-```python
-class ContextManager:
-    def __init__(self, config: AgentConfig): ...
-    def add_message(self, msg: Message) -> None: ...
-    def get_messages(self) -> list[Message]: ...
-    def token_count(self) -> int: ...          # rough estimate
-    def trim(self) -> None: ...                # apply trim strategy
-    def snapshot(self) -> list[Message]: ...   # serialisable copy
-```
 
 ---
 
 ### 4.3 `core/session.py` — Session Manager
 
 Responsibilities:
-- Give each session a **UUID + timestamp + optional name**.
-- **Persist** sessions to `~/.tau/sessions/<id>.json`.
-- **Resume** a session by ID (restores message history into ContextManager).
-- List / delete sessions.
-
-```
-~/.tau/
-├── config.toml
-└── sessions/
-    ├── <uuid>.json
-    └── ...
-```
+- UUID + timestamp + optional name per session.
+- Persist to `~/.tau/sessions/<id>.json`.
+- Resume by ID prefix.
+- **Fork** a session at any message index → new session, parent_id + fork_index recorded.
+- **List branches** (direct children of a session).
+- **Get fork points** (all user messages eligible as fork targets).
+- Append `CompactionEntry` records to a session.
 
 Session file schema:
 ```json
 {
   "id": "uuid",
-  "name": "optional human name",
+  "name": "optional name",
   "created_at": "ISO-8601",
   "updated_at": "ISO-8601",
-  "config": { "provider": "openai", "model": "gpt-4o" },
-  "messages": [ ... ]
+  "parent_id": "uuid | null",
+  "fork_index": 3,
+  "config": { "provider": "openai", "model": "gpt-4o", ... },
+  "messages": [ ... ],
+  "compactions": [ { "summary": "...", "tokens_before": 4200, "timestamp": "..." } ]
 }
-```
-
-```python
-class SessionManager:
-    def new_session(self, config: AgentConfig, name: str | None) -> Session: ...
-    def save(self, session: Session, messages: list[Message]) -> None: ...
-    def load(self, session_id: str) -> Session: ...
-    def list_sessions(self) -> list[SessionMeta]: ...
-    def delete(self, session_id: str) -> None: ...
 ```
 
 ---
 
 ### 4.4 `core/tool_registry.py` — Tool Registry & Dispatcher
 
-Responsibilities:
-- Central registry: `name → ToolDefinition`.
-- **Register** built-in tools at startup; skills register additional tools.
-- **Dispatch** tool calls from the LLM: validate args, invoke handler, return `ToolResult`.
-- Provide tool schemas in the format each provider expects (OpenAI function-calling, Google `FunctionDeclaration`, etc.).
-
-```python
-class ToolRegistry:
-    def register(self, tool: ToolDefinition) -> None: ...
-    def get(self, name: str) -> ToolDefinition: ...
-    def all_definitions(self) -> list[ToolDefinition]: ...
-    def dispatch(self, call: ToolCall) -> ToolResult: ...
-```
+- Central `name → ToolDefinition` map.
+- `register()` / `register_many()` — called by built-ins, SkillLoader, ExtensionRegistry.
+- `dispatch(call)` — invokes handler, wraps exceptions in `ToolResult(is_error=True)`.
+- `all_definitions()` — used by providers to build their tool schema.
 
 ---
 
 ### 4.5 `core/agent.py` — Agent Loop
 
-This is the heart of tau. It runs the **ReAct-style loop**:
+ReAct-style loop with three resilience layers:
 
 ```
-while turns < max_turns:
-    1. context.trim()                          # enforce token budget
-    2. response = provider.chat(messages, tools)
-    3. if response.is_final_answer:
-           yield AssistantMessage; break
-    4. for each tool_call in response.tool_calls:
-           result = registry.dispatch(tool_call)
-           context.add_message(tool_result_msg)
-    5. context.add_message(assistant_msg)
-    6. turns += 1
+agent.run(user_input):
+
+  [retry loop — up to retry_max_attempts]
+    1. context.trim()
+    2. if compactor.should_compact(): run compaction → emit CompactionEvents
+    3. response = provider.chat(messages, tools)   ← streaming or blocking
+       └─ if streaming: check SteeringChannel after each TextDelta
+          └─ if steer arrives: emit SteerEvent, restart turn with new input
+    4. if response.tool_calls:
+         for call in tool_calls:
+           result = registry.dispatch(call)
+           emit ToolCallEvent, ToolResultEvent
+           context.add_message(tool_result)
+    5. else: emit TextChunk/TextDelta, TurnComplete; break
+    6. if provider raises retryable error: emit RetryEvent, sleep, retry
+    7. if provider raises overflow error: compact, retry once
+
+  [follow-up queue — after each TurnComplete]
+    if steering.dequeue(): loop back with next queued prompt
 ```
 
-```python
-class Agent:
-    def __init__(self, config, provider, registry, context, session): ...
-    def run(self, user_input: str) -> Generator[Event, None, None]: ...
-    # Events: TextChunk | ToolCallEvent | ToolResultEvent | ErrorEvent
-```
-
-Streaming-first: the loop yields typed `Event` objects so the CLI can render incrementally.
+**Retry policy** (configurable via `AgentConfig`):
+- Exponential backoff: `base_delay × 2^(attempt-1)`.
+- Retryable: rate limits, 5xx errors, network timeouts.
+- Non-retryable: auth errors, bad requests, overflow (handled by compaction).
 
 ---
 
-### 4.6 `providers/base.py` — Provider Protocol
+### 4.6 `core/steering.py` — SteeringChannel
+
+Thread-safe communication between the REPL input thread and the agent loop.
+
+| Mechanism | Write (REPL thread) | Read (agent thread) | Semantics |
+|-----------|--------------------|--------------------|-----------|
+| **Steer** | `steer(msg)` | `consume_steer()` after each delta | Interrupt current stream, restart turn |
+| **Queue** | `enqueue(msg)` | `dequeue()` after TurnComplete | FIFO follow-up prompts |
+
+---
+
+### 4.7 `core/extension.py` — Extension System
+
+The extension system is the primary extensibility mechanism for tau. It supersedes the older skills system for new work (skills remain supported for backwards compatibility).
+
+#### `Extension` base class
+
+```python
+class Extension:
+    manifest: ExtensionManifest          # MUST set as class attribute
+
+    def tools(self) -> list[ToolDefinition]: ...          # register tools
+    def slash_commands(self) -> list[SlashCommand]: ...   # register /commands
+    def handle_slash(self, cmd, args, ctx) -> bool: ...   # handle /command
+    def event_hook(self, event: Event) -> None: ...       # observe all events
+    def on_load(self, ctx: ExtensionContext) -> None: ... # startup callback
+    def on_unload(self) -> None: ...                      # teardown (future)
+```
+
+Every extension file must expose a module-level `EXTENSION` instance.
+
+#### `ExtensionContext` façade
+
+Passed to `on_load()` and `handle_slash()`. Gives extensions safe access to:
+- `register_tool(tool)` — register additional tools at runtime.
+- `registered_tools()` — list of currently registered tool names.
+- `enqueue(msg)` — add a follow-up prompt to the steering queue.
+- `print(text)` — write to the REPL console (Rich markup supported).
+- `token_count()` — current context token usage.
+
+#### `ExtensionRegistry`
+
+Discovery and lifecycle management:
+
+```python
+ExtensionRegistry(
+    extra_paths=[],       # additional search dirs
+    disabled=[],          # extension names to skip
+    include_builtins=True # set False in tests for isolation
+)
+```
+
+Search order (first match by name wins):
+1. `tau/extensions/` (built-ins)
+2. `~/.tau/extensions/` (user)
+3. Extra paths from `config.toml → [extensions] paths`
+
+Supported file layouts:
+```
+my_ext.py              ← single-file extension
+my_ext/extension.py    ← package (preferred entry point)
+my_ext/__init__.py     ← package (fallback)
+```
+
+All load/dispatch/hook errors are caught and logged — a bad extension never crashes tau.
+
+Runtime API:
+- `load_all(registry, context, steering, console_print)` — discover + register all.
+- `handle_slash(raw_input, ext_context)` — route `/command` to owning extension.
+- `fire_hooks(event)` — broadcast an event to all registered hooks.
+- `loaded_extensions()` → `list[ExtensionManifest]`
+- `all_slash_commands()` → sorted `list[(name, description)]`
+- `get(name)` → `Extension | None`
+
+---
+
+### 4.8 `providers/base.py` — Provider Protocol
 
 ```python
 class BaseProvider(Protocol):
@@ -234,91 +344,95 @@ class BaseProvider(Protocol):
         messages: list[Message],
         tools: list[ToolDefinition],
         stream: bool = True,
-    ) -> ProviderResponse: ...
-
-    @property
-    def name(self) -> str: ...
+    ) -> ProviderResponse | Generator[TextDelta | ProviderResponse, None, None]: ...
 ```
 
-`ProviderResponse` normalises the LLM response:
+`ProviderResponse`:
 ```
 content       str | None
 tool_calls    list[ToolCall]
 stop_reason   "end_turn" | "tool_use" | "max_tokens" | "error"
-usage         TokenUsage(input, output)
+usage         TokenUsage(input_tokens, output_tokens)
 ```
-
-Each concrete provider (`openai_provider.py`, `google_provider.py`, `ollama_provider.py`) adapts the SDK response to this shape.
 
 ---
 
-### 4.7 `tools/fs.py` — Filesystem Tools
+### 4.9 `tools/fs.py` — Filesystem Tools
 
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read a file, optionally slice by line range |
+| `read_file` | Read file, optionally slice by line range |
 | `write_file` | Create or overwrite a file |
-| `edit_file` | Apply a targeted patch (old_str → new_str) |
+| `edit_file` | Targeted patch (old_str → new_str) |
 | `list_dir` | List directory contents |
 | `search_files` | Grep / glob across the workspace |
 
-All paths are validated against a configurable **workspace root** to prevent escapes.
+All paths validated against a configurable **workspace root**.
 
 ---
 
-### 4.8 `tools/shell.py` — Shell Tool
+### 4.10 `tools/shell.py` — Shell Tool
 
 | Tool | Description |
 |------|-------------|
-| `run_bash` | Run a shell command, capture stdout/stderr/exit-code |
+| `run_bash` | Run shell command, capture stdout/stderr/exit-code |
 
-Safety flags (configurable):
-- `require_confirmation` — ask user `y/n` before executing.
-- `allowed_commands` — allowlist of command prefixes.
-- `timeout` — hard kill after N seconds.
+Safety flags: `require_confirmation`, `allowed_commands`, `timeout`.
 
 ---
 
-### 4.9 `skills/` — Skill System
+### 4.11 `skills/` — Legacy Skill System
 
 A **skill** is a directory containing:
 - `skill.yaml` — name, version, description, optional system prompt fragment.
-- `tools.py` — additional `ToolDefinition`s to register.
+- `tools.py` — `TOOLS: list[ToolDefinition]`.
 
-The `SkillLoader` scans:
-1. Built-in `tau/skills/`
-2. `~/.tau/skills/`
-3. Any path in `config.toml → [skills] paths`
-
-```python
-class SkillLoader:
-    def discover(self) -> list[Skill]: ...
-    def load_into(self, registry: ToolRegistry, context: ContextManager) -> None: ...
-```
-
-This makes tau trivially extensible: drop a folder, restart, new tools available.
+`SkillLoader` scans built-in `tau/skills/`, `~/.tau/skills/`, and extra paths from config. Fully backwards-compatible; new extensibility work should use the Extension system instead.
 
 ---
 
 ## 5. CLI Design (`cli.py`)
 
 ```
-tau                          # interactive REPL (default)
-tau "fix the bug in foo.py"  # single-shot mode
-tau --provider google --model gemini-2.0-flash "..."
-tau --session <id>           # resume a session
+tau run                              # interactive REPL
+tau run "fix the bug in foo.py"      # single-shot
+tau run -p ollama -m llama3 "..."    # choose provider/model
+tau run -s <session-id>              # resume session
+
 tau sessions list
 tau sessions show <id>
 tau sessions delete <id>
-tau config set provider openai
-tau config set model gpt-4o
+tau sessions fork <id> <index>       # branch at message index
+tau sessions fork <id> <index> --resume
+tau sessions branches <id>           # list direct forks
+tau sessions fork-points <id>        # list forkable user messages
+
+tau extensions list                  # list loaded extensions
+tau extensions show <name>           # detail view for one extension
+
+tau config show
+tau config set <key> <value>
 ```
 
-The REPL renders:
-- Assistant text with markdown (via `rich`).
-- Tool calls as collapsible blocks: `▶ run_bash("pytest tests/")`.
-- Tool results (stdout/stderr) in a dim style.
-- Token usage per turn in the status bar.
+**REPL slash commands** (built-in):
+
+| Command | Description |
+|---------|-------------|
+| `/queue <msg>` | Add follow-up prompt to the queue |
+| `/queue` | Show queue size |
+| `/steer <msg>` | Inject mid-stream steer |
+| `/clear` | Cancel pending steer |
+| `/help` | Show all commands (built-in + extension) |
+| `exit` / Ctrl-D | Quit |
+
+Extension slash commands are auto-listed in `/help` and routed via `ExtensionRegistry.handle_slash()`.
+
+**Built-in extension slash commands:**
+
+| Command | Extension | Description |
+|---------|-----------|-------------|
+| `/wc <text>` | word_count | Count words/lines/chars |
+| `/json <json>` | pretty_json | Pretty-print JSON inline |
 
 ---
 
@@ -328,17 +442,18 @@ Config file: `~/.tau/config.toml`
 
 ```toml
 [defaults]
-provider = "openai"
-model    = "gpt-4o"
-max_tokens = 8192
-max_turns  = 20
+provider      = "openai"
+model         = "gpt-4o"
+max_tokens    = 8192
+max_turns     = 20
 trim_strategy = "sliding_window"
 
 [providers.openai]
-api_key = "sk-..."          # or env: OPENAI_API_KEY
+api_key  = "sk-..."          # or env: OPENAI_API_KEY
+base_url = "https://api.openai.com/v1"
 
 [providers.google]
-api_key = "..."             # or env: GOOGLE_API_KEY
+api_key = "..."              # or env: GOOGLE_API_KEY
 
 [providers.ollama]
 base_url = "http://localhost:11434"
@@ -346,12 +461,18 @@ base_url = "http://localhost:11434"
 [tools.shell]
 require_confirmation = true
 timeout = 30
+allowed_commands = []        # empty = allow all
 
 [skills]
-paths = ["~/my-skills"]
+paths    = ["~/my-skills"]
+disabled = []
+
+[extensions]
+paths    = ["~/my-extensions"]
+disabled = ["word_count"]    # opt out of a built-in
 ```
 
-Environment variables always override config file values.
+Environment variables always override config file values (`TAU_PROVIDER`, `TAU_MODEL`, `TAU_EXTENSIONS_DISABLED`, etc.).
 
 ---
 
@@ -361,45 +482,95 @@ Environment variables always override config file values.
 User input
     │
     ▼
-cli.py  ──► agent.run(input)
+cli.py ──► agent.run(input)
                 │
                 ├─ context.add_message(user_msg)
                 ├─ context.trim()
+                ├─ compactor.should_compact()? ──► compact() ──► CompactionEvent
                 │
-                ├─ provider.chat(messages, tools)  ◄── LLM API
+                ├─ provider.chat(messages, tools)   ◄── LLM API
                 │       │
-                │       ▼
+                │    streaming?
+                │    ├─ yes: yield TextDelta per token
+                │    │       check SteeringChannel after each delta
+                │    │       steer? ──► SteerEvent ──► restart turn
+                │    └─ no:  blocking ProviderResponse
+                │
                 │   ProviderResponse
-                │       │
-                │  ┌────┴──────┐
-                │  │ tool_calls│          │ final text │
-                │  └────┬──────┘          └─────┬──────┘
-                │       │                       │
-                │  registry.dispatch()      yield TextChunk
-                │       │                  session.save()
-                │  ToolResult
-                │       │
-                │  context.add_message(tool_result)
-                │       │
-                └───────┘ (loop)
+                │    ├─ tool_calls ──► registry.dispatch()
+                │    │                ──► yield ToolCallEvent, ToolResultEvent
+                │    │                ──► context.add_message(tool_result)
+                │    │                ──► loop
+                │    └─ final text ──► yield TextChunk / TurnComplete
+                │                 ──► ext_registry.fire_hooks(TurnComplete)
+                │                 ──► session.save()
+                │
+                ├─ retryable error? ──► yield RetryEvent ──► sleep ──► retry
+                ├─ overflow error?  ──► compact ──► retry once
+                │
+                └─ steering.dequeue()? ──► loop with next queued prompt
 ```
 
 ---
 
-## 8. Extension Points (Future)
+## 8. Extension System — Writing an Extension
 
-| Area | How to extend |
-|------|---------------|
-| New LLM provider | Implement `BaseProvider`, register in `providers/__init__.py` |
-| New built-in tool | Add function to `tools/`, register in `tools/__init__.py` |
-| New skill | Drop a folder in `~/.tau/skills/` |
-| Context strategy | Implement `BaseTrimStrategy`, set in config |
-| Output renderer | Swap the `Renderer` used in `cli.py` |
-| Auth / secrets | Pluggable `SecretStore` in `config.py` |
+Minimal single-file extension (`~/.tau/extensions/my_ext.py`):
+
+```python
+from tau.core.extension import Extension, ExtensionContext
+from tau.core.types import ExtensionManifest, SlashCommand, ToolDefinition, ToolParameter
+
+class MyExtension(Extension):
+    manifest = ExtensionManifest(
+        name="my_ext",
+        version="1.0.0",
+        description="Does something useful.",
+        author="you",
+        system_prompt_fragment="You also have my_ext tools available.",
+    )
+
+    def tools(self) -> list[ToolDefinition]:
+        return [
+            ToolDefinition(
+                name="my_tool",
+                description="Does something.",
+                parameters={"x": ToolParameter(type="string", description="input")},
+                handler=lambda x: f"result: {x}",
+            )
+        ]
+
+    def slash_commands(self) -> list[SlashCommand]:
+        return [SlashCommand(name="do", description="Run my tool.", usage="/do <input>")]
+
+    def handle_slash(self, command: str, args: str, ctx: ExtensionContext) -> bool:
+        if command != "do":
+            return False
+        ctx.print(f"result: {args}")
+        return True
+
+    def event_hook(self, event) -> None:
+        from tau.core.types import TurnComplete
+        if isinstance(event, TurnComplete):
+            print(f"turn used {event.usage.total} tokens")
+
+    def on_load(self, ctx: ExtensionContext) -> None:
+        ctx.print("[dim]my_ext loaded[/dim]")
+
+EXTENSION = MyExtension()
+```
+
+Package layout (for complex extensions):
+```
+~/.tau/extensions/my_ext/
+    extension.py       ← preferred entry point
+    helpers.py
+    data/
+```
 
 ---
 
-## 9. Dependencies (Minimal)
+## 9. Dependencies
 
 | Package | Purpose |
 |---------|---------|
@@ -408,20 +579,30 @@ cli.py  ──► agent.run(input)
 | `openai` | OpenAI + compatible APIs |
 | `google-genai` | Google Gemini |
 | `httpx` | Ollama (plain HTTP) |
-| `pydantic` | Config validation |
-| `tomllib` (stdlib 3.11+) | Config parsing |
+| `pydantic` + `pydantic-settings` | Config validation |
+| `tomllib` (stdlib ≥ 3.11) / `tomli` | Config parsing |
+| `pyyaml` | Skill YAML parsing |
 
-No LangChain, no heavy framework. Everything in tau is hand-rolled and < 1 kloc for the core.
+No LangChain, no heavy framework. The core is hand-rolled and stays under ~2 kloc.
 
 ---
 
-## 10. Phased Implementation Plan
+## 10. Implementation Status
 
-| Phase | Deliverable |
-|-------|-------------|
-| **P0** | `core/types`, `core/tool_registry`, `tools/fs`, `tools/shell`, `providers/base` + `openai` |
-| **P1** | `core/agent` loop, `cli.py` REPL, `core/context` sliding-window |
-| **P2** | `core/session` persistence & resume, `config.py` |
-| **P3** | `providers/google`, `providers/ollama` |
-| **P4** | `skills/` loader, example skill, `context/summarise` strategy |
-| **P5** | Polish: streaming render, token counter, `tau sessions` commands |
+| Feature | Status | Tests |
+|---------|--------|-------|
+| Core agent loop | ✅ done | `test_agent.py` |
+| Provider layer (OpenAI / Google / Ollama) | ✅ done | — |
+| Filesystem tools | ✅ done | `test_fs_tools.py` |
+| Shell tool | ✅ done | — |
+| Context manager (sliding window + summarise) | ✅ done | `test_context.py` |
+| Session persistence & resume | ✅ done | `test_session.py` |
+| **Auto-compaction** (threshold + overflow recovery) | ✅ done | `test_compaction.py` |
+| **Auto-retry** with exponential backoff | ✅ done | `test_retry.py` |
+| **Mid-stream steering** + follow-up queue | ✅ done | `test_steering.py` |
+| **Session branching** (fork / branches / fork-points) | ✅ done | `test_session.py` |
+| **Extension system** | ✅ done | `test_extensions.py` (72 tests) |
+| Legacy skills system | ✅ done | — |
+| `tau extensions list/show` CLI commands | ✅ done | — |
+
+**Total: 274 tests, all passing.**

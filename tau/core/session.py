@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tau.core.types import AgentConfig
+from tau.core.types import AgentConfig, CompactionEntry, ForkInfo
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,13 @@ class SessionMeta:
     updated_at: str
     provider: str
     model: str
+    parent_id: str | None = None    # set when this session was forked
+    fork_index: int | None = None   # message index it was forked after
 
     def display(self) -> str:
         label = self.name or "(unnamed)"
-        return f"{self.id[:8]}  {label:<24}  {self.model:<20}  {self.updated_at[:19]}"
+        fork_marker = f"  ⎇ fork@{self.fork_index}" if self.parent_id else ""
+        return f"{self.id[:8]}  {label:<24}  {self.model:<20}  {self.updated_at[:19]}{fork_marker}"
 
 
 @dataclass
@@ -48,6 +51,9 @@ class Session:
     updated_at: str
     config: AgentConfig
     messages: list[dict[str, Any]] = field(default_factory=list)  # raw dicts
+    compactions: list[dict[str, Any]] = field(default_factory=list)  # compaction history
+    parent_id: str | None = None    # set when forked
+    fork_index: int | None = None   # message index forked after
 
     @property
     def meta(self) -> SessionMeta:
@@ -58,6 +64,8 @@ class Session:
             updated_at=self.updated_at,
             provider=self.config.provider,
             model=self.config.model,
+            parent_id=self.parent_id,
+            fork_index=self.fork_index,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,6 +84,9 @@ class Session:
                 "workspace_root": self.config.workspace_root,
             },
             "messages": self.messages,
+            "compactions": self.compactions,
+            "parent_id": self.parent_id,
+            "fork_index": self.fork_index,
         }
 
     @classmethod
@@ -97,6 +108,9 @@ class Session:
             updated_at=d["updated_at"],
             config=config,
             messages=d.get("messages", []),
+            compactions=d.get("compactions", []),
+            parent_id=d.get("parent_id"),
+            fork_index=d.get("fork_index"),
         )
 
 
@@ -172,3 +186,85 @@ class SessionManager:
             raise SessionNotFoundError(f"Session {session_id!r} not found.")
         path.unlink()
         logger.debug("Deleted session %s", session_id)
+
+    def append_compaction(self, session: Session, entry: CompactionEntry) -> None:
+        """Record a compaction entry in the session and persist to disk."""
+        session.compactions.append({
+            "summary": entry.summary,
+            "tokens_before": entry.tokens_before,
+            "timestamp": entry.timestamp,
+        })
+        session.updated_at = _now_iso()
+        self._path(session.id).write_text(
+            json.dumps(session.to_dict(), indent=2), encoding="utf-8"
+        )
+        logger.debug(
+            "Recorded compaction in session %s (tokens_before=%d)",
+            session.id, entry.tokens_before,
+        )
+
+    def fork(
+        self,
+        session_id: str,
+        fork_index: int,
+        name: str | None = None,
+    ) -> Session:
+        """
+        Create a new session that is a copy of *session_id* up to and including
+        message at *fork_index* (0-based, among all messages including system).
+
+        The new session records parent_id and fork_index so the tree can be
+        reconstructed.  Returns the new forked Session.
+        """
+        parent = self.load(session_id)
+
+        # Clamp to valid range
+        if fork_index < 0 or fork_index >= len(parent.messages):
+            raise ValueError(
+                f"fork_index {fork_index} is out of range "
+                f"(session has {len(parent.messages)} messages, indices 0–{len(parent.messages)-1})."
+            )
+
+        now = _now_iso()
+        forked = Session(
+            id=str(uuid.uuid4()),
+            name=name or f"fork of {parent.name or parent.id[:8]} @{fork_index}",
+            created_at=now,
+            updated_at=now,
+            config=parent.config,
+            messages=parent.messages[: fork_index + 1],
+            compactions=[],          # compaction history is not inherited
+            parent_id=parent.id,
+            fork_index=fork_index,
+        )
+        self.save(forked)
+        logger.debug(
+            "Forked session %s → %s at index %d (%d messages)",
+            parent.id, forked.id, fork_index, len(forked.messages),
+        )
+        return forked
+
+    def get_fork_points(self, session_id: str) -> list[ForkInfo]:
+        """
+        Return every user message in *session_id* as a potential fork point,
+        with its index and a short content preview.
+        """
+        session = self.load(session_id)
+        points: list[ForkInfo] = []
+        for i, msg in enumerate(session.messages):
+            if msg.get("role") == "user":
+                preview = (msg.get("content") or "")[:80].replace("\n", " ")
+                points.append(ForkInfo(index=i, content=preview))
+        return points
+
+    def list_branches(self, session_id: str) -> list[SessionMeta]:
+        """Return all sessions that were forked directly from *session_id*."""
+        branches: list[SessionMeta] = []
+        for p in self._dir.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if data.get("parent_id") == session_id:
+                    branches.append(Session.from_dict(data).meta)
+            except Exception:  # noqa: BLE001
+                pass
+        return sorted(branches, key=lambda m: m.created_at)

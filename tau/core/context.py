@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
-from tau.core.types import AgentConfig, Message, Role
+from tau.core.types import AgentConfig, CompactionEntry, Message, Role
 
 if TYPE_CHECKING:
     pass
@@ -155,6 +156,163 @@ _STRATEGIES: dict[str, TrimStrategy] = {
 
 
 # ---------------------------------------------------------------------------
+# Compactor — threshold-based auto-compaction using the active provider
+# ---------------------------------------------------------------------------
+_COMPACTION_SYSTEM = (
+    "You are a conversation compactor. "
+    "Produce a dense, structured summary of the conversation below. "
+    "Preserve ALL key facts, decisions, file paths, code snippets, errors, "
+    "and any unresolved tasks. Be thorough — this summary replaces the original history."
+)
+
+_COMPACTION_PROMPT = (
+    "Summarise the following conversation history. "
+    "Keep every important technical detail, file name, code change, "
+    "decision, and pending task:\n\n{transcript}"
+)
+
+# Minimum non-system messages required before compaction is attempted
+_MIN_MESSAGES_TO_COMPACT = 4
+# How many recent messages to always keep verbatim after compaction
+_KEEP_RECENT_AFTER_COMPACT = 4
+
+
+class Compactor:
+    """Checks whether context has hit the threshold and compacts it if so."""
+
+    def __init__(self, config: AgentConfig) -> None:
+        self._config = config
+        self._overflow_recovery_attempted = False
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def should_compact(self, messages: list[Message]) -> bool:
+        """Return True when current token count exceeds the threshold."""
+        if not self._config.compaction_enabled:
+            return False
+        current = _messages_tokens(messages)
+        threshold = int(self._config.max_tokens * self._config.compaction_threshold)
+        return current >= threshold
+
+    def is_overflow_error(self, error_message: str) -> bool:
+        """Return True when the provider error looks like a context-length overflow."""
+        markers = (
+            "context_length_exceeded",
+            "maximum context length",
+            "context window",
+            "too many tokens",
+            "reduce the length",
+            "reduce your prompt",
+            "prompt is too long",
+        )
+        lower = error_message.lower()
+        return any(m in lower for m in markers)
+
+    def compact(
+        self,
+        messages: list[Message],
+        provider: Any,          # BaseProvider — avoid circular import
+        tokens_before: int,
+    ) -> tuple[list[Message], CompactionEntry]:
+        """
+        Compact *messages* using *provider*.
+
+        Returns:
+            (new_messages, CompactionEntry)
+        """
+        system_msgs = [m for m in messages if m.role == "system"]
+        non_system = [m for m in messages if m.role != "system"]
+
+        # Split: everything except the most recent _KEEP_RECENT_AFTER_COMPACT messages
+        to_summarise = non_system[:-_KEEP_RECENT_AFTER_COMPACT] if len(non_system) > _KEEP_RECENT_AFTER_COMPACT else non_system
+        keep_recent = non_system[-_KEEP_RECENT_AFTER_COMPACT:] if len(non_system) > _KEEP_RECENT_AFTER_COMPACT else []
+
+        if len(to_summarise) < _MIN_MESSAGES_TO_COMPACT:
+            # Not enough history to summarise — return unchanged
+            raise ValueError("Not enough messages to compact (need at least %d non-system messages)" % (_MIN_MESSAGES_TO_COMPACT + _KEEP_RECENT_AFTER_COMPACT))
+
+        transcript = self._build_transcript(to_summarise)
+        summary = self._call_summary(transcript, provider)
+
+        summary_msg = Message(
+            role="user",
+            content=f"[Compacted conversation summary — earlier history replaced]\n{summary}",
+        )
+        new_messages = system_msgs + [summary_msg] + keep_recent
+        tokens_after = _messages_tokens(new_messages)
+
+        entry = CompactionEntry(
+            summary=summary,
+            tokens_before=tokens_before,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+        logger.debug(
+            "Compactor: %d → %d tokens (summarised %d messages, kept %d)",
+            tokens_before, tokens_after, len(to_summarise), len(keep_recent),
+        )
+        return new_messages, entry
+
+    # ------------------------------------------------------------------
+    # Overflow recovery helpers
+    # ------------------------------------------------------------------
+
+    def mark_overflow_recovery_attempted(self) -> None:
+        self._overflow_recovery_attempted = True
+
+    def overflow_recovery_attempted(self) -> bool:
+        return self._overflow_recovery_attempted
+
+    def reset_overflow_flag(self) -> None:
+        self._overflow_recovery_attempted = False
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _build_transcript(self, messages: list[Message]) -> str:
+        parts: list[str] = []
+        for m in messages:
+            role_label = m.role.upper()
+            content = (m.content or "").strip()
+            if m.tool_calls:
+                calls = "; ".join(f"{tc.name}({tc.arguments})" for tc in m.tool_calls)
+                content = f"{content}\n[tool calls: {calls}]".strip()
+            parts.append(f"{role_label}: {content}")
+        return "\n\n".join(parts)
+
+    def _call_summary(self, transcript: str, provider: Any) -> str:
+        """Ask the active provider for a compaction summary."""
+        prompt = _COMPACTION_PROMPT.format(transcript=transcript)
+        compaction_messages = [
+            Message(role="system", content=_COMPACTION_SYSTEM),
+            Message(role="user", content=prompt),
+        ]
+        try:
+            raw = provider.chat(messages=compaction_messages, tools=[])
+            # Handle both streaming and non-streaming responses
+            from tau.core.types import ProviderResponse, TextDelta
+            if isinstance(raw, ProviderResponse):
+                return (raw.content or "").strip() or transcript
+            # Streaming — collect all deltas
+            text_parts: list[str] = []
+            for item in raw:
+                if isinstance(item, TextDelta):
+                    text_parts.append(item.text)
+                elif isinstance(item, ProviderResponse):
+                    if item.content:
+                        return item.content.strip()
+            result = "".join(text_parts).strip()
+            return result or transcript
+        except Exception as exc:
+            logger.warning("Compactor: summary call failed (%s), using transcript excerpt", exc)
+            # Truncate transcript as fallback
+            return transcript[:2000] + ("\n…[truncated]" if len(transcript) > 2000 else "")
+
+
+# ---------------------------------------------------------------------------
 # ContextManager
 # ---------------------------------------------------------------------------
 
@@ -165,6 +323,8 @@ class ContextManager:
         self._strategy: TrimStrategy = _STRATEGIES.get(
             config.trim_strategy, SlidingWindowStrategy()
         )
+        self.compactor = Compactor(config)
+
         # Inject system prompt
         if config.system_prompt:
             self._messages.append(Message(role="system", content=config.system_prompt))

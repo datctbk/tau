@@ -146,7 +146,43 @@ class AgentConfig:
     )
     trim_strategy: Literal["sliding_window", "summarise"] = "sliding_window"
     workspace_root: str = "."
+    # --- auto-compaction ---
+    compaction_enabled: bool = True
+    compaction_threshold: float = 0.80  # compact when context reaches 80% of max_tokens
+    # --- auto-retry ---
+    retry_enabled: bool = True
+    retry_max_attempts: int = 3
+    retry_base_delay: float = 2.0   # seconds; doubles each attempt
 
+# ---------------------------------------------------------------------------
+# Compaction
+# ---------------------------------------------------------------------------
+@dataclass
+class CompactionEntry:
+    """Stored in the session to mark a compaction point."""
+    summary: str
+    tokens_before: int
+    timestamp: str
+
+# ---------------------------------------------------------------------------
+# Retry
+# ---------------------------------------------------------------------------
+@dataclass
+class RetryEvent:
+    """Emitted when the agent is about to retry after a retryable error."""
+    attempt: int          # 1-based current attempt number
+    max_attempts: int
+    delay: float          # seconds the agent will wait before retrying
+    error: str            # the error message that triggered the retry
+
+# ---------------------------------------------------------------------------
+# Session branching
+# ---------------------------------------------------------------------------
+@dataclass
+class ForkInfo:
+    """Metadata about one fork point (a user message in a session)."""
+    index: int          # 0-based position in session.messages
+    content: str        # text preview of the user message
 
 # ---------------------------------------------------------------------------
 # Agent events (streamed from agent loop → CLI renderer)
@@ -184,4 +220,59 @@ class ErrorEvent:
     message: str
 
 
-Event = TextChunk | TextDelta | ToolCallEvent | ToolResultEvent | TurnComplete | ErrorEvent
+@dataclass
+class CompactionEvent:
+    """Emitted when auto-compaction runs (start or end)."""
+    stage: Literal["start", "end"]
+    tokens_before: int = 0
+    tokens_after: int = 0
+    summary: str = ""
+    error: str = ""
+
+@dataclass
+class SteerEvent:
+    """Emitted when the user steers mid-stream (current response discarded)."""
+    new_input: str          # the injected user message
+    discarded_tokens: int   # how many tokens of the interrupted response were dropped
+
+# ---------------------------------------------------------------------------
+# Extension system
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ExtensionManifest:
+    """Static metadata declared by every Extension subclass."""
+    name: str                           # unique snake_case identifier
+    version: str = "0.1.0"
+    description: str = ""
+    author: str = ""
+    system_prompt_fragment: str = ""    # appended to the agent system prompt
+
+
+@dataclass
+class SlashCommand:
+    """A /command registered by an extension."""
+    name: str                   # without the leading slash, e.g. "fmt"
+    description: str = ""
+    usage: str = ""             # e.g. "/fmt [file]"
+
+
+@dataclass
+class ExtensionLoadError:
+    """Emitted (as an Event) when an extension fails to load at startup."""
+    extension_name: str
+    error: str
+
+
+Event = (
+    TextChunk
+    | TextDelta
+    | ToolCallEvent
+    | ToolResultEvent
+    | TurnComplete
+    | ErrorEvent
+    | CompactionEvent
+    | RetryEvent
+    | SteerEvent
+    | ExtensionLoadError
+)

@@ -18,6 +18,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "PyYAML>=6.0",
     "tiktoken>=0.7",
+    "prompt_toolkit>=3.0",
 ]
 
 [project.scripts]
