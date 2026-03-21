@@ -165,9 +165,22 @@ def _render_events(
     user_input: str,
     verbose: bool = False,
     ext_registry: ExtensionRegistry | None = None,
+    output_fn: "Callable[[str], None] | None" = None,
 ) -> None:
+    """Render agent events. If output_fn is provided, all output is sent there
+    (for TUI mode). Otherwise writes to sys.stdout / console."""
     stream_buffer: list[str] = []
     is_streaming = False
+
+    def _write(text: str) -> None:
+        if output_fn:
+            output_fn(text)
+        else:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
+    def _writeln(text: str = "") -> None:
+        _write(text + "\n")
 
     def _flush_stream(end_line: bool = True) -> None:
         nonlocal is_streaming
@@ -175,8 +188,7 @@ def _render_events(
             return
         is_streaming = False
         if end_line:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+            _writeln()
         stream_buffer.clear()
 
     def _confirm_with_flush(command: str) -> bool:
@@ -195,8 +207,7 @@ def _render_events(
             if not is_streaming:
                 is_streaming = True
             stream_buffer.append(event.text)
-            sys.stdout.write(event.text)
-            sys.stdout.flush()
+            _write(event.text)
         elif isinstance(event, TextChunk):
             _flush_stream(end_line=True)
         elif isinstance(event, ToolCallEvent):
@@ -204,70 +215,61 @@ def _render_events(
             args_display = ", ".join(
                 f"{k}={str(v)[:60]!r}" for k, v in event.call.arguments.items()
             )
-            console.print(Text.assemble(
-                ("  ▶ ", Style(color="yellow", bold=True)),
-                (event.call.name, Style(color="cyan", bold=True)),
-                (f"({args_display})", Style(color="white", dim=True)),
-            ))
+            if output_fn:
+                _writeln(f"  ▶ {event.call.name} ({args_display})")
+            else:
+                console.print(Text.assemble(
+                    ("  ▶ ", Style(color="yellow", bold=True)),
+                    (event.call.name, Style(color="cyan", bold=True)),
+                    (f"({args_display})", Style(color="white", dim=True)),
+                ))
         elif isinstance(event, ToolResultEvent):
             r = event.result
-            style = "red dim" if r.is_error else "green dim"
             icon = "✗" if r.is_error else "✓"
             preview_lines = r.content.splitlines()[:5]
-            preview = "\n".join(preview_lines)
+            preview = "\n    ".join(preview_lines)
             if len(r.content.splitlines()) > 5:
-                preview += f"\n  … ({len(r.content.splitlines())} lines total)"
-            console.print(Panel(
-                Text(preview, style=style),
-                title=Text(f"{icon} result", style=style),
-                border_style=style,
-                padding=(0, 1),
-            ))
+                preview += f"\n    … ({len(r.content.splitlines())} lines total)"
+            if output_fn:
+                _writeln(f"  {icon} result:\n    {preview}")
+            else:
+                style = "red dim" if r.is_error else "green dim"
+                console.print(Panel(
+                    Text(preview, style=style),
+                    title=Text(f"{icon} result", style=style),
+                    border_style=style,
+                    padding=(0, 1),
+                ))
         elif isinstance(event, TurnComplete):
             _flush_stream(end_line=True)
             u = event.usage
-            console.print(f"[dim]  ↳ tokens: {u.input_tokens} in / {u.output_tokens} out[/dim]")
+            if output_fn:
+                _writeln(f"  ↳ tokens: {u.input_tokens} in / {u.output_tokens} out")
+            else:
+                console.print(f"[dim]  ↳ tokens: {u.input_tokens} in / {u.output_tokens} out[/dim]")
         elif isinstance(event, CompactionEvent):
             _flush_stream(end_line=True)
             if event.stage == "start":
-                console.print(Text.assemble(
-                    ("  ⟳ ", Style(color="yellow", bold=True)),
-                    ("compacting context", Style(color="yellow")),
-                    (f"  ({event.tokens_before:,} tokens)", Style(dim=True)),
-                ))
+                _writeln(f"  ⟳ compacting context ({event.tokens_before:,} tokens)")
             else:
                 if event.error:
-                    console.print(f"[yellow dim]  ⚠ compaction failed: {event.error}[/yellow dim]")
+                    _writeln(f"  ⚠ compaction failed: {event.error}")
                 else:
                     saved = event.tokens_before - event.tokens_after
-                    console.print(Text.assemble(
-                        ("  ✓ ", Style(color="green", bold=True)),
-                        ("context compacted", Style(color="green")),
-                        (f"  {event.tokens_before:,} → {event.tokens_after:,} tokens", Style(dim=True)),
-                        (f"  (saved {saved:,})", Style(color="green", dim=True)),
-                    ))
+                    _writeln(f"  ✓ compacted {event.tokens_before:,} → {event.tokens_after:,} tokens (saved {saved:,})")
         elif isinstance(event, RetryEvent):
             _flush_stream(end_line=True)
-            console.print(Text.assemble(
-                ("  ↻ ", Style(color="yellow", bold=True)),
-                (f"retrying (attempt {event.attempt}/{event.max_attempts})", Style(color="yellow")),
-                (f"  in {event.delay:.1f}s", Style(dim=True)),
-                (f"  — {event.error[:80]}", Style(color="yellow", dim=True)),
-            ))
+            _writeln(f"  ↻ retrying (attempt {event.attempt}/{event.max_attempts}) in {event.delay:.1f}s — {event.error[:80]}")
         elif isinstance(event, SteerEvent):
             _flush_stream(end_line=True)
-            console.print(Text.assemble(
-                ("  ⇢ ", Style(color="magenta", bold=True)),
-                ("steered", Style(color="magenta")),
-                (f"  ↳ {event.new_input[:80]}", Style(color="magenta", dim=True)),
-            ))
-            console.print(Rule(style="dim"))
+            _writeln(f"  ⇢ steered ↳ {event.new_input[:80]}")
+            _writeln("─" * 60)
         elif isinstance(event, ExtensionLoadError):
             _flush_stream(end_line=True)
-            console.print(f"[yellow dim]  ⚠ extension {event.extension_name!r} failed: {event.error}[/yellow dim]")
+            _writeln(f"  ⚠ extension {event.extension_name!r} failed: {event.error}")
         elif isinstance(event, ErrorEvent):
             _flush_stream(end_line=False)
-            console.print(f"[bold red]Error:[/bold red] {event.message}")
+            _writeln(f"Error: {event.message}")
     _flush_stream(end_line=True)
 
 # ---------------------------------------------------------------------------
@@ -433,51 +435,150 @@ def _repl(
             console_print=console.print,
         )
 
-    console.print(Panel(
-        Text.assemble(
-            ("tau ", Style(bold=True, color="cyan")),
-            (f"v{_tau_version()}  ", Style(dim=True)),
-            (agent_config.provider, Style(color="magenta")),
-            ("/", Style(dim=True)),
-            (agent_config.model, Style(color="magenta")),
-            ("  ·  ", Style(dim=True)),
-            ("exit", Style(bold=True)),
-            (" or ", Style(dim=True)),
-            ("Ctrl-D", Style(bold=True)),
-            (" to quit  ·  ", Style(dim=True)),
-            ("/help", Style(bold=True)),
-            (" for commands", Style(dim=True)),
-        ),
-        border_style="cyan",
-        padding=(0, 1),
-    ))
+    import threading
+    from prompt_toolkit import Application
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.document import Document
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, HSplit, Window, ScrollablePane
+    from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+    from prompt_toolkit.layout.processors import BeforeInput
 
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.formatted_text import HTML
+    # -- state ---------------------------------------------------------------
+    agent_running = threading.Event()
+    app_ref: list[Application | None] = [None]
+    output_text_parts: list[str] = []
 
-    session_prompt: PromptSession[str] = PromptSession()
+    header = (
+        f"tau v{_tau_version()}  {agent_config.provider}/{agent_config.model}"
+        f"  ·  exit or Ctrl-D to quit  ·  /help for commands\n"
+        + "═" * 60 + "\n"
+    )
+    output_text_parts.append(header)
 
-    while True:
-        prompt_label = HTML("\n<b><ansicyan>you</ansicyan></b> ")
+    # -- buffers -------------------------------------------------------------
+    output_buffer = Buffer(name="output", read_only=True)
+    output_buffer.set_document(
+        Document(header, len(header)), bypass_readonly=True
+    )
+
+    input_buffer = Buffer(name="input")
+
+    # -- helpers -------------------------------------------------------------
+    def _append_output(text: str) -> None:
+        output_text_parts.append(text)
+        full = "".join(output_text_parts)
+        output_buffer.set_document(
+            Document(full, len(full)), bypass_readonly=True
+        )
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _get_prompt_prefix() -> list[tuple[str, str]]:
+        if agent_running.is_set():
+            return [("bold fg:ansimagenta", "steer ")]
+        return [("bold fg:ansicyan", "you ")]
+
+    # -- agent runner --------------------------------------------------------
+    def _run_agent(user_input: str) -> None:
+        agent_running.set()
+        if app_ref[0]:
+            app_ref[0].invalidate()
         try:
-            user_input = session_prompt.prompt(prompt_label)
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Goodbye.[/dim]")
-            break
+            _render_events(
+                agent, user_input, verbose,
+                ext_registry=ext_registry,
+                output_fn=_append_output,
+            )
+        except Exception as exc:
+            _append_output(f"\nError: {exc}\n")
+        finally:
+            agent_running.clear()
+            if app_ref[0]:
+                app_ref[0].invalidate()
 
-        stripped = user_input.strip()
-        if not stripped:
-            continue
-        if stripped.lower() in ("exit", "quit", "bye"):
-            console.print("[dim]Goodbye.[/dim]")
-            break
+    # -- input handler -------------------------------------------------------
+    def _on_enter(event: object) -> None:
+        text = input_buffer.text.strip()
+        input_buffer.reset()
 
-        if stripped.startswith("/") and steering is not None:
-            if _handle_slash(stripped, steering, ext_registry, ext_context, agent=agent):
-                continue
+        if not text:
+            return
 
-        console.print(Rule(style="dim"))
-        _render_events(agent, stripped, verbose, ext_registry=ext_registry)
+        if text.lower() in ("exit", "quit", "bye"):
+            _append_output("\nGoodbye.\n")
+            if app_ref[0]:
+                app_ref[0].exit()
+            return
+
+        # slash commands
+        if text.startswith("/") and steering is not None:
+            handled = _handle_slash(
+                text, steering, ext_registry, ext_context, agent=agent
+            )
+            if handled:
+                return
+
+        # steering (agent already running)
+        if agent_running.is_set() and steering is not None:
+            steering.steer(text)
+            _append_output(f'\n  ⇢ steered "{text[:60]}" (stream will restart)\n')
+            return
+
+        # new agent turn
+        _append_output(f"\nyou {text}\n" + "─" * 60 + "\n")
+        threading.Thread(
+            target=_run_agent, args=(text,), daemon=True
+        ).start()
+
+    # -- key bindings --------------------------------------------------------
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _enter(event: object) -> None:
+        _on_enter(event)
+
+    @kb.add("c-d")
+    def _ctrl_d(event: object) -> None:
+        _append_output("\nGoodbye.\n")
+        app_ref[0].exit()  # type: ignore[union-attr]
+
+    @kb.add("c-c")
+    def _ctrl_c(event: object) -> None:
+        _append_output("\nGoodbye.\n")
+        app_ref[0].exit()  # type: ignore[union-attr]
+
+    # -- layout --------------------------------------------------------------
+    input_window = Window(
+        content=BufferControl(
+            buffer=input_buffer,
+            input_processors=[BeforeInput(_get_prompt_prefix)],
+            focusable=True,
+        ),
+        height=1,
+    )
+
+    layout = Layout(
+        HSplit([
+            Window(
+                content=BufferControl(buffer=output_buffer, focusable=False),
+                wrap_lines=True,
+            ),
+            Window(height=1, char="─", style="class:separator"),
+            input_window,
+        ]),
+        focused_element=input_window,
+    )
+
+    # -- run -----------------------------------------------------------------
+    application: Application[None] = Application(
+        layout=layout,
+        key_bindings=kb,
+        full_screen=True,
+        mouse_support=True,
+    )
+    app_ref[0] = application
+    application.run()
 
 
 def _tau_version() -> str:
