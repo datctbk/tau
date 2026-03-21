@@ -191,9 +191,6 @@ def _render_events(
             ext_registry.fire_hooks(event)
         if isinstance(event, TextDelta):
             if event.is_thinking:
-                if verbose:
-                    sys.stdout.write(f"\x1b[2m{event.text}\x1b[0m")
-                    sys.stdout.flush()
                 continue
             if not is_streaming:
                 is_streaming = True
@@ -201,8 +198,7 @@ def _render_events(
             sys.stdout.write(event.text)
             sys.stdout.flush()
         elif isinstance(event, TextChunk):
-            _flush_stream(end_line=False)
-            console.print(Markdown(event.text))
+            _flush_stream(end_line=True)
         elif isinstance(event, ToolCallEvent):
             _flush_stream(end_line=True)
             args_display = ", ".join(
@@ -456,29 +452,15 @@ def _repl(
         padding=(0, 1),
     ))
 
-    _agent_running = threading.Event()
-    _agent_thread: threading.Thread | None = None
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.formatted_text import HTML
 
-    def _run_agent(user_input: str) -> None:
-        _agent_running.set()
-        try:
-            _render_events(agent, user_input, verbose, ext_registry=ext_registry)
-        finally:
-            _agent_running.clear()
-
-    def _dispatch(user_input: str) -> None:
-        nonlocal _agent_thread
-        console.print(Rule(style="dim"))
-        _agent_thread = threading.Thread(target=_run_agent, args=(user_input,), daemon=True)
-        _agent_thread.start()
+    session_prompt: PromptSession[str] = PromptSession()
 
     while True:
-        if _agent_running.is_set():
-            prompt_label = "\n[bold magenta]steer[/bold magenta]"
-        else:
-            prompt_label = "\n[bold cyan]you[/bold cyan]"
+        prompt_label = HTML("\n<b><ansicyan>you</ansicyan></b> ")
         try:
-            user_input = Prompt.ask(prompt_label)
+            user_input = session_prompt.prompt(prompt_label)
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Goodbye.[/dim]")
             break
@@ -494,18 +476,8 @@ def _repl(
             if _handle_slash(stripped, steering, ext_registry, ext_context, agent=agent):
                 continue
 
-        if _agent_running.is_set() and steering is not None:
-            steering.steer(stripped)
-            console.print(Text.assemble(
-                ("  ⇢ steered  ", Style(color="magenta", bold=True)),
-                (f'"{stripped[:60]}"', Style(color="magenta")),
-                ("  (stream will restart)", Style(dim=True)),
-            ))
-            continue
-
-        if _agent_thread is not None:
-            _agent_thread.join(timeout=0)
-        _dispatch(stripped)
+        console.print(Rule(style="dim"))
+        _render_events(agent, stripped, verbose, ext_registry=ext_registry)
 
 
 def _tau_version() -> str:
