@@ -62,6 +62,7 @@ _AGENT_OPTIONS = [
     click.option("--provider", "-p", default=None, help="LLM provider (openai, google, ollama)."),
     click.option("--model", "-m", default=None, help="Model name."),
     click.option("--think", "-t", default=None, type=click.Choice(["off", "minimal", "low", "medium", "high", "xhigh"]), help="Reasoning/thinking effort level."),
+    click.option("--image", "-i", multiple=True, help="Attach image file(s) to the first prompt."),
     click.option("--session", "-s", "resume_id", default=None, help="Resume session by ID or prefix."),
     click.option("--session-name", default=None, help="Name for the new session."),
     click.option("--no-confirm", is_flag=True, default=False, help="Disable shell confirmation prompts."),
@@ -172,6 +173,7 @@ def _render_events(
     agent: Agent,
     user_input: str,
     verbose: bool = False,
+    images: list[str] | None = None,
     ext_registry: ExtensionRegistry | None = None,
     output_fn: "Callable[[str], None] | None" = None,
 ) -> None:
@@ -210,7 +212,7 @@ def _render_events(
         from tau.tools import shell as _shell_mod
         _shell_mod._confirm_hook = _confirm_with_flush
 
-    for event in agent.run(user_input):
+    for event in agent.run(user_input, images=images):
         if ext_registry is not None:
             ext_registry.fire_hooks(event)
         if isinstance(event, TextDelta):
@@ -323,6 +325,7 @@ def _handle_slash(
     ext_context: ExtensionContext | None,
     agent: "Agent | None" = None,
     output_fn: Callable[[str], None] | None = None,
+    staged_images: list[str] | None = None,
 ) -> bool:
     def _print(renderable: Any) -> None:
         if output_fn:
@@ -449,6 +452,19 @@ def _handle_slash(
             ))
         return True
 
+    if keyword == "/image":
+        if not arg:
+            _print("[dim]  Usage: /image <path/to/image.png>[/dim]")
+            return True
+        img_path = Path(arg).resolve()
+        if img_path.exists():
+            if staged_images is not None:
+                staged_images.append(str(img_path))
+            _print(f"  [green]✓[/green] staged image: {img_path.name}")
+        else:
+            _print(f"  [red]✗[/red] image not found: {img_path}")
+        return True
+
     if keyword == "/tokens":
         if agent is not None:
             used = agent._context.token_count()
@@ -494,6 +510,7 @@ def _repl(
     agent_config: AgentConfig,
     verbose: bool = False,
     ext_registry: ExtensionRegistry | None = None,
+    staged_images: list[str] | None = None,
 ) -> None:
     steering: SteeringChannel | None = agent._steering
     ext_context: ExtensionContext | None = None
@@ -520,6 +537,7 @@ def _repl(
     agent_running = threading.Event()
     app_ref: list[Application | None] = [None]
     output_text_parts: list[str] = []
+    _staged_images = staged_images or []
 
     # Shell confirmation synchronisation (agent thread ↔ UI thread)
     confirm_pending = threading.Event()      # set while waiting for user answer
@@ -589,8 +607,11 @@ def _repl(
         if app_ref[0]:
             app_ref[0].invalidate()
         try:
+            imgs = list(_staged_images)
+            _staged_images.clear()
             _render_events(
                 agent, user_input, verbose,
+                images=imgs if imgs else None,
                 ext_registry=ext_registry,
                 output_fn=_append_output,
             )
@@ -627,7 +648,7 @@ def _repl(
         # slash commands
         if text.startswith("/") and steering is not None:
             handled = _handle_slash(
-                text, steering, ext_registry, ext_context, agent=agent, output_fn=_append_output
+                text, steering, ext_registry, ext_context, agent=agent, output_fn=_append_output, staged_images=_staged_images
             )
             if handled:
                 return
@@ -728,6 +749,7 @@ def run_cmd(
     provider: str | None,
     model: str | None,
     think: str | None,
+    image: tuple[str, ...],
     resume_id: str | None,
     session_name: str | None,
     no_confirm: bool,
@@ -750,9 +772,9 @@ def run_cmd(
         steering=steering,
     )
     if prompt:
-        _render_events(agent, prompt, verbose, ext_registry=ext_registry)
+        _render_events(agent, prompt, verbose, images=list(image) if image else None, ext_registry=ext_registry)
     else:
-        _repl(agent, agent_config, verbose, ext_registry=ext_registry)
+        _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None)
 
 # ---------------------------------------------------------------------------
 # `tau sessions` subcommands
@@ -819,7 +841,7 @@ def sessions_delete(session_id: str, yes: bool) -> None:
 @_agent_options
 def sessions_fork(
     session_id: str, message_index: int, name: str | None, resume: bool,
-    provider: str | None, model: str | None, think: str | None, resume_id: str | None,
+    provider: str | None, model: str | None, think: str | None, image: tuple[str, ...], resume_id: str | None,
     session_name: str | None, no_confirm: bool, workspace: str, verbose: bool,
 ) -> None:
     sm = SessionManager()

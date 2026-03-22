@@ -194,7 +194,27 @@ def _to_oai_message(m: Message) -> dict[str, Any]:
                 for tc in m.tool_calls
             ],
         }
-    return {"role": m.role, "content": m.content or ""}
+    content: str | list[dict[str, Any]] = m.content or ""
+    if m.images:
+        import base64
+        import mimetypes
+        from pathlib import Path
+        parts: list[dict[str, Any]] = [{"type": "text", "text": content}] if content else []
+        for img_path in m.images:
+            try:
+                mime_type, _ = mimetypes.guess_type(img_path)
+                mime_type = mime_type or "image/jpeg"
+                with Path(img_path).open("rb") as f:
+                    encoded = base64.b64encode(f.read()).decode("utf-8")
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{encoded}"}
+                })
+            except Exception as e:
+                logger.error(f"Failed to load image for OpenAI {img_path}: {e}")
+        if parts:
+            content = parts
+    return {"role": m.role, "content": content}
 def _to_oai_tool(t: ToolDefinition) -> dict[str, Any]:
     return {
         "type": "function",

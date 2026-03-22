@@ -163,7 +163,21 @@ def _to_ollama_message(m: Message) -> dict[str, Any]:
                 for tc in m.tool_calls
             ],
         }
-    return {"role": m.role, "content": m.content or ""}
+    msg_dict: dict[str, Any] = {"role": m.role, "content": m.content or ""}
+    if m.images:
+        import base64
+        from pathlib import Path
+        imgs: list[str] = []
+        for img_path in m.images:
+            try:
+                with Path(img_path).open("rb") as f:
+                    encoded = base64.b64encode(f.read()).decode("utf-8")
+                imgs.append(encoded)
+            except Exception as e:
+                logger.error(f"Failed to load image for Ollama {img_path}: {e}")
+        if imgs:
+            msg_dict["images"] = imgs
+    return msg_dict
 
 
 def _to_ollama_tool(t: ToolDefinition) -> dict[str, Any]:

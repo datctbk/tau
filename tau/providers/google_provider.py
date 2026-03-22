@@ -53,7 +53,7 @@ class GoogleProvider:
         stream: bool = True,
     ) -> ProviderResponse | Generator:
         gtypes = self._gtypes
-        system_prompt, history, last_user = _split_messages(messages)
+        system_prompt, history, last_user, last_user_images = _split_messages(messages, gtypes)
 
         google_tools = _to_google_tools(tools, gtypes) if tools else None
         config_kwargs: dict[str, Any] = {}
@@ -75,7 +75,8 @@ class GoogleProvider:
 
         gen_config = gtypes.GenerateContentConfig(**config_kwargs) if config_kwargs else None
 
-        contents = history + [{"role": "user", "parts": [{"text": last_user}]}]
+        last_parts = _build_parts(last_user, last_user_images, gtypes)
+        contents = history + [{"role": "user", "parts": last_parts}]
         logger.debug("Google request: model=%s, turns=%d, stream=%s",
                      self._model, len(history), stream)
 
@@ -168,20 +169,43 @@ def _parse_google_response(response) -> ProviderResponse:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _split_messages(messages: list[Message]) -> tuple[str, list[dict], str]:
+def _build_parts(content: str, images: list[str] | None, gtypes: Any) -> list[Any]:
+    parts = []
+    if content:
+        parts.append({"text": content})
+    if images:
+        import mimetypes
+        from pathlib import Path
+        for img_path in images:
+            try:
+                mime_type, _ = mimetypes.guess_type(img_path)
+                mime_type = mime_type or "image/jpeg"
+                with Path(img_path).open("rb") as f:
+                    data = f.read()
+                # Use from_bytes or a dict based on standard python types support
+                parts.append(gtypes.Part.from_bytes(data=data, mime_type=mime_type))
+            except Exception as e:
+                logger.error(f"Failed to load image for Google {img_path}: {e}")
+    if not parts:
+        parts = [{"text": ""}]
+    return parts
+
+def _split_messages(messages: list[Message], gtypes: Any) -> tuple[str, list[dict], str, list[str] | None]:
     system_parts: list[str] = []
     history: list[dict] = []
     last_user = ""
+    last_user_images: list[str] | None = None
 
     for m in messages:
         if m.role == "system":
             system_parts.append(m.content)
         elif m.role == "user":
             last_user = m.content
+            last_user_images = m.images
             if history:
-                history.append({"role": "user", "parts": [{"text": m.content}]})
+                history.append({"role": "user", "parts": _build_parts(m.content, m.images, gtypes)})
         elif m.role == "assistant":
-            history.append({"role": "model", "parts": [{"text": m.content or ""}]})
+            history.append({"role": "model", "parts": _build_parts(m.content or "", m.images, gtypes)})
         elif m.role == "tool":
             history.append({
                 "role": "user",
@@ -192,7 +216,7 @@ def _split_messages(messages: list[Message]) -> tuple[str, list[dict], str]:
                 }}],
             })
 
-    return "\n\n".join(system_parts), history, last_user
+    return "\n\n".join(system_parts), history, last_user, last_user_images
 
 
 def _to_google_tools(tools: list[ToolDefinition], gtypes: Any) -> list[Any]:

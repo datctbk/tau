@@ -20,6 +20,7 @@ class Message:
     tool_call_id: str | None = None   # for role="tool" results
     tool_calls: list[ToolCall] | None = None  # for role="assistant" with calls
     name: str | None = None           # tool name (some providers require it)
+    images: list[str] | None = None   # list of absolute file paths to attached images
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role, "content": self.content}
@@ -29,6 +30,8 @@ class Message:
             d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
         if self.name:
             d["name"] = self.name
+        if self.images:
+            d["images"] = self.images
         return d
 
     @classmethod
@@ -42,6 +45,7 @@ class Message:
             tool_call_id=d.get("tool_call_id"),
             tool_calls=tool_calls,
             name=d.get("name"),
+            images=d.get("images"),
         )
 
 

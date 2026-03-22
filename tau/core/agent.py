@@ -95,9 +95,9 @@ class Agent:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, user_input: str) -> Generator[Event, None, None]:
+    def run(self, user_input: str, images: list[str] | None = None) -> Generator[Event, None, None]:
         """Process one user message; yield Events for the CLI to render."""
-        self._context.add_message(Message(role="user", content=user_input))
+        self._context.add_message(Message(role="user", content=user_input, images=images))
         self._context.compactor.reset_overflow_flag()
 
         turns = 0
