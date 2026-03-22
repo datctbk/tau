@@ -109,6 +109,31 @@ class ToolResult:
 
 
 # ---------------------------------------------------------------------------
+# Agent Hooks
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BeforeToolCallResult:
+    block: bool = False
+    reason: str | None = None
+
+@dataclass
+class AfterToolCallResult:
+    content: str | None = None
+    is_error: bool | None = None
+
+@dataclass
+class BeforeToolCallContext:
+    tool_call: ToolCall
+    agent: Any  # Agent
+
+@dataclass
+class AfterToolCallContext:
+    tool_call: ToolCall
+    result: ToolResult
+    agent: Any  # Agent
+
+# ---------------------------------------------------------------------------
 # Provider response
 # ---------------------------------------------------------------------------
 
@@ -144,6 +169,7 @@ class AgentConfig:
     provider: str = "openai"
     model: str = "gpt-4o"
     thinking_level: str = "off"
+    thinking_budgets: dict[str, int] = field(default_factory=dict)
     max_tokens: int = 8192
     max_turns: int = 20
     system_prompt: str = (

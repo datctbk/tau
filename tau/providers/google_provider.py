@@ -63,13 +63,15 @@ class GoogleProvider:
             config_kwargs["tools"] = google_tools
 
         if self._agent_config.thinking_level != "off":
-            budgets = {
-                "minimal": 1024,
-                "low": 2048,
-                "medium": 8192,
-                "high": 16384,
-                "xhigh": 32768,
-            }
+            budgets = self._agent_config.thinking_budgets
+            if not budgets:
+                budgets = {
+                    "minimal": 1024,
+                    "low": 2048,
+                    "medium": 8192,
+                    "high": 16384,
+                    "xhigh": 32768,
+                }
             budget = budgets.get(self._agent_config.thinking_level, 4096)
             config_kwargs["thinking_config"] = {"thinking_budget_tokens": budget}
 

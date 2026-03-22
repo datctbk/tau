@@ -64,6 +64,15 @@ class SkillsConfig(BaseSettings):
     disabled: list[str] = []
 
 
+class ThinkingBudgetsConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAU_THINKING_BUDGETS_")
+    minimal: int = 1024
+    low: int = 2048
+    medium: int = 8192
+    high: int = 16384
+    xhigh: int = 32768
+
+
 class ExtensionsConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TAU_EXTENSIONS_")
     paths: list[str] = []
@@ -114,6 +123,7 @@ class TauConfig(BaseSettings):
     skills: SkillsConfig = SkillsConfig()
     extensions: ExtensionsConfig = ExtensionsConfig()
     pricing: PricingConfig = PricingConfig()
+    thinking_budgets: ThinkingBudgetsConfig = ThinkingBudgetsConfig()
 
     @field_validator("trim_strategy")
     @classmethod
@@ -174,6 +184,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
         init["extensions"] = raw["extensions"]
     if "pricing" in raw:
         init["pricing"] = raw["pricing"]
+    if "thinking_budgets" in raw:
+        init["thinking_budgets"] = raw["thinking_budgets"]
     return TauConfig(**init)
 
 

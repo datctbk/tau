@@ -14,7 +14,13 @@ if TYPE_CHECKING:
     from tau.core.context import ContextManager
     from tau.core.steering import SteeringChannel
     from tau.core.tool_registry import ToolRegistry
-    from tau.core.types import Event
+    from tau.core.types import (
+        AfterToolCallContext,
+        AfterToolCallResult,
+        BeforeToolCallContext,
+        BeforeToolCallResult,
+        Event,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +78,14 @@ class Extension:
     def event_hook(self, event: "Event") -> None:
         """Called for every Event yielded by agent.run(). Override to observe/react."""
         pass
+
+    def before_tool_call(self, context: "BeforeToolCallContext") -> "BeforeToolCallResult | None":
+        """Called before a tool executes. Return a result to block execution."""
+        return None
+
+    def after_tool_call(self, context: "AfterToolCallContext") -> "AfterToolCallResult | None":
+        """Called after a tool executes but before yielding the result. Return a result to override."""
+        return None
 
     def on_load(self, context: "ExtensionContext") -> None:
         """Called once after the extension is fully registered."""
@@ -337,6 +351,32 @@ class ExtensionRegistry:
                 hook(event)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Extension event hook raised: %s", exc)
+
+    def fire_before_tool_call(self, context: "BeforeToolCallContext") -> "BeforeToolCallResult | None":
+        """Dispatch before_tool_call hook to all extensions. Short-circuits if blocked."""
+        for ext in self._extensions.values():
+            try:
+                if type(ext).before_tool_call is not Extension.before_tool_call:
+                    res = ext.before_tool_call(context)
+                    if res is not None and res.block:
+                        return res
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Extension before_tool_call raised: %s", exc)
+        return None
+
+    def fire_after_tool_call(self, context: "AfterToolCallContext") -> None:
+        """Dispatch after_tool_call hook, applying any content/is_error mutations to context.result in place."""
+        for ext in self._extensions.values():
+            try:
+                if type(ext).after_tool_call is not Extension.after_tool_call:
+                    res = ext.after_tool_call(context)
+                    if res is not None:
+                        if res.content is not None:
+                            context.result.content = res.content
+                        if res.is_error is not None:
+                            context.result.is_error = res.is_error
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Extension after_tool_call raised: %s", exc)
 
     # ------------------------------------------------------------------
     # Introspection

@@ -19,12 +19,19 @@ from tau.core.types import (
     TextDelta,
     ToolCall,
     ToolCallEvent,
+    ToolCallEvent,
     ToolResultEvent,
     TurnComplete,
+    BeforeToolCallContext,
+    BeforeToolCallResult,
+    AfterToolCallContext,
+    AfterToolCallResult,
+    ToolResult,
 )
 
 if TYPE_CHECKING:
     from tau.core.context import ContextManager
+    from tau.core.extension import ExtensionRegistry
     from tau.core.session import Session, SessionManager
     from tau.core.steering import SteeringChannel
     from tau.core.tool_registry import ToolRegistry
@@ -82,10 +89,12 @@ class Agent:
         session: "Session",
         session_manager: "SessionManager",
         steering: "SteeringChannel | None" = None,
+        ext_registry: "ExtensionRegistry | None" = None,
     ) -> None:
         self._config = config
         self._provider = provider
         self._registry = registry
+        self._ext_registry = ext_registry
         self._context = context
         self._session = session
         self._session_manager = session_manager
@@ -175,7 +184,29 @@ class Agent:
             # Dispatch each tool call
             for call in response.tool_calls:
                 yield ToolCallEvent(call=call)
+
+                if self._ext_registry:
+                    ctx = BeforeToolCallContext(tool_call=call, agent=self)
+                    res = self._ext_registry.fire_before_tool_call(ctx)
+                    if res and res.block:
+                        from tau.core.types import ToolResult # ensure scope
+                        err_msg = res.reason or f"Blocked by extension: {call.name}"
+                        result = ToolResult(tool_call_id=call.id, content=err_msg, is_error=True)
+                        yield ToolResultEvent(result=result)
+                        self._context.add_message(Message(
+                            role="tool",
+                            content=result.content,
+                            tool_call_id=result.tool_call_id,
+                            name=call.name,
+                        ))
+                        continue
+
                 result = self._registry.dispatch(call)
+
+                if self._ext_registry:
+                    ctx_after = AfterToolCallContext(tool_call=call, result=result, agent=self)
+                    self._ext_registry.fire_after_tool_call(ctx_after)
+
                 yield ToolResultEvent(result=result)
                 self._context.add_message(Message(
                     role="tool",

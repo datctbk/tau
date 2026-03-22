@@ -159,6 +159,7 @@ def _make_agent_config(
         provider=tau_config.provider,
         model=model or tau_config.model,
         thinking_level=think or "off",
+        thinking_budgets=tau_config.thinking_budgets.model_dump(),
         max_tokens=tau_config.max_tokens,
         max_turns=tau_config.max_turns,
         system_prompt=tau_config.system_prompt,
