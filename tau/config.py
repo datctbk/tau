@@ -70,6 +70,22 @@ class ExtensionsConfig(BaseSettings):
     disabled: list[str] = []
 
 
+class PricingConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAU_PRICING_")
+    # Cost per 1M tokens: input, output, cache_read, cache_write
+    models: dict[str, dict[str, float]] = {
+        "gpt-4o": {"input": 2.50, "output": 10.00, "cache_read": 1.25},
+        "gpt-4o-mini": {"input": 0.150, "output": 0.600, "cache_read": 0.075},
+        "o1-mini": {"input": 3.00, "output": 12.00, "cache_read": 1.50},
+        "o1-preview": {"input": 15.00, "output": 60.00, "cache_read": 7.50},
+        "o3-mini": {"input": 1.10, "output": 4.40, "cache_read": 0.55},
+        "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+        "claude-3-5-haiku-20241022": {"input": 0.25, "output": 1.25, "cache_read": 0.03, "cache_write": 0.30},
+        "gemini-2.5-pro": {"input": 2.00, "output": 8.00},
+        "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
+        "gemini-2.0-flash-thinking-exp": {"input": 0.0, "output": 0.0},
+    }
+
 # ---------------------------------------------------------------------------
 # Root config
 # ---------------------------------------------------------------------------
@@ -97,6 +113,7 @@ class TauConfig(BaseSettings):
     shell: ShellToolConfig = ShellToolConfig()
     skills: SkillsConfig = SkillsConfig()
     extensions: ExtensionsConfig = ExtensionsConfig()
+    pricing: PricingConfig = PricingConfig()
 
     @field_validator("trim_strategy")
     @classmethod
@@ -106,6 +123,25 @@ class TauConfig(BaseSettings):
             raise ValueError(f"trim_strategy must be one of {allowed}")
         return v
 
+    def calculate_cost(self, model: str, usage_in: Any) -> float:
+        """Calculate the USD cost of a TokenUsage object for the given model."""
+        rates = self.pricing.models.get(model)
+        if not rates:
+            # Sort by longest prefix first to match more specific variants
+            for prefix, pre_rates in sorted(self.pricing.models.items(), key=lambda x: len(x[0]), reverse=True):
+                if model.startswith(prefix):
+                    rates = pre_rates
+                    break
+        if not rates:
+            return 0.0
+        
+        # We type usage_in as Any to avoid circular import with TokenUsage, but we duck-type it here
+        return (
+            (getattr(usage_in, "input_tokens", 0) / 1_000_000) * rates.get("input", 0.0) +
+            (getattr(usage_in, "output_tokens", 0) / 1_000_000) * rates.get("output", 0.0) +
+            (getattr(usage_in, "cache_read_tokens", 0) / 1_000_000) * rates.get("cache_read", 0.0) +
+            (getattr(usage_in, "cache_write_tokens", 0) / 1_000_000) * rates.get("cache_write", 0.0)
+        )
 
 # ---------------------------------------------------------------------------
 # Loader
@@ -136,6 +172,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
         init["skills"] = raw["skills"]
     if "extensions" in raw:
         init["extensions"] = raw["extensions"]
+    if "pricing" in raw:
+        init["pricing"] = raw["pricing"]
     return TauConfig(**init)
 
 

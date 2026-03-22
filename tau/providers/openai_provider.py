@@ -36,6 +36,7 @@ class OpenAIProvider:
         except ImportError as exc:
             raise ImportError("openai package is required: pip install openai") from exc
 
+        self._agent_config = agent_config
         self._model = agent_config.model
         self._client = OpenAI(
             api_key=config.openai.api_key or None,
@@ -60,6 +61,17 @@ class OpenAIProvider:
             "messages": oai_messages,
             "stream": stream,
         }
+
+        if self._agent_config.thinking_level != "off":
+            oai_map = {
+                "minimal": "low",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "high",
+            }
+            kwargs["reasoning_effort"] = oai_map.get(self._agent_config.thinking_level, "medium")
+
         if oai_tools:
             kwargs["tools"] = oai_tools
         if stream:

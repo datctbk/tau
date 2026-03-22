@@ -61,6 +61,7 @@ def _setup_logging(verbose: bool) -> None:
 _AGENT_OPTIONS = [
     click.option("--provider", "-p", default=None, help="LLM provider (openai, google, ollama)."),
     click.option("--model", "-m", default=None, help="Model name."),
+    click.option("--think", "-t", default=None, type=click.Choice(["off", "minimal", "low", "medium", "high", "xhigh"]), help="Reasoning/thinking effort level."),
     click.option("--session", "-s", "resume_id", default=None, help="Resume session by ID or prefix."),
     click.option("--session-name", default=None, help="Name for the new session."),
     click.option("--no-confirm", is_flag=True, default=False, help="Disable shell confirmation prompts."),
@@ -145,6 +146,7 @@ def _make_agent_config(
     tau_config: TauConfig,
     provider: str | None,
     model: str | None,
+    think: str | None,
     no_confirm: bool,
     workspace: str,
 ) -> AgentConfig:
@@ -155,6 +157,7 @@ def _make_agent_config(
     return AgentConfig(
         provider=tau_config.provider,
         model=model or tau_config.model,
+        thinking_level=think or "off",
         max_tokens=tau_config.max_tokens,
         max_turns=tau_config.max_turns,
         system_prompt=tau_config.system_prompt,
@@ -200,8 +203,12 @@ def _render_events(
         _flush_stream(end_line=True)
         return _default_confirm(command)
 
-    from tau.tools import shell as _shell_mod
-    _shell_mod._confirm_hook = _confirm_with_flush
+    # In TUI mode, the REPL sets its own confirm hook (_tui_confirm)
+    # on the shell module *before* the agent thread starts, so we only
+    # override with _confirm_with_flush for the non-TUI (plain stdout) path.
+    if output_fn is None:
+        from tau.tools import shell as _shell_mod
+        _shell_mod._confirm_hook = _confirm_with_flush
 
     for event in agent.run(user_input):
         if ext_registry is not None:
@@ -248,10 +255,26 @@ def _render_events(
         elif isinstance(event, TurnComplete):
             _flush_stream(end_line=True)
             u = event.usage
+            tau_config = load_config()
+            # session.cumulative_usage is a dict in tau.core.session, but calculate_cost expects an object.
+            # wait, calculate_cost uses gettattr. But cumulative_usage is a dict!
+            # I must construct a TokenUsage object from cumulative_usage, or update calculate_cost to handle dicts.
+            # actually, calculate_cost doing `getattr(..., "input_tokens", 0)` will fail if it's a dict! 
+            # So I will pass a dummy object, or just calculate it directly if it's easier.
+            cu = getattr(agent._session, "cumulative_usage", {})
+            class _DummyUsage:
+                input_tokens = cu.get("input_tokens", 0)
+                output_tokens = cu.get("output_tokens", 0)
+                cache_read_tokens = cu.get("cache_read_tokens", 0)
+                cache_write_tokens = cu.get("cache_write_tokens", 0)
+            
+            session_cost = tau_config.calculate_cost(agent._config.model, _DummyUsage())
+            cost_str = f" — session cost: ${session_cost:.3f}" if session_cost > 0 else ""
+
             if output_fn:
-                _writeln(f"  ↳ tokens: {u.input_tokens} in / {u.output_tokens} out")
+                _writeln(f"  ↳ tokens: {u.input_tokens} in / {u.output_tokens} out{cost_str}")
             else:
-                console.print(f"[dim]  ↳ tokens: {u.input_tokens} in / {u.output_tokens} out[/dim]")
+                console.print(f"[dim]  ↳ tokens: {u.input_tokens} in / {u.output_tokens} out{cost_str}[/dim]")
         elif isinstance(event, CompactionEvent):
             _flush_stream(end_line=True)
             if event.stage == "start":
@@ -287,6 +310,7 @@ _SLASH_HELP = (
     "  /clear         wipe message history and start fresh\n"
     "  /compact       manually compact the context now\n"
     "  /model <name>  hot-swap the model for this session\n"
+    "  /think <level> hot-swap the reasoning effort (off, low, medium, high)\n"
     "  /tokens        show current token usage\n"
     "  /help          show this message\n"
     "  exit / Ctrl-D  quit"
@@ -298,7 +322,17 @@ def _handle_slash(
     ext_registry: ExtensionRegistry | None,
     ext_context: ExtensionContext | None,
     agent: "Agent | None" = None,
+    output_fn: Callable[[str], None] | None = None,
 ) -> bool:
+    def _print(renderable: Any) -> None:
+        if output_fn:
+            import io
+            f = io.StringIO()
+            c = Console(file=f, force_terminal=True, color_system="truecolor")
+            c.print(renderable)
+            output_fn(f.getvalue())
+        else:
+            console.print(renderable)
     parts = cmd.split(None, 1)
     keyword = parts[0].lower()
     arg = parts[1].strip() if len(parts) > 1 else ""
@@ -310,37 +344,37 @@ def _handle_slash(
             if ext_cmds:
                 lines = "\n".join(f"  /{name:<14} {desc}" for name, desc in ext_cmds)
                 help_text += f"\n\nExtension commands:\n{lines}"
-        console.print(Panel(help_text, title="tau slash commands", border_style="dim"))
+        _print(Panel(help_text, title="tau slash commands", border_style="dim"))
         return True
 
     if keyword == "/queue":
         if arg:
             steering.enqueue(arg)
             size = steering.queue_size()
-            console.print(Text.assemble(
+            _print(Text.assemble(
                 ("  + queued  ", Style(color="cyan")),
                 (f'"{arg[:60]}"', Style(color="cyan", bold=True)),
                 (f"  ({size} in queue)", Style(dim=True)),
             ))
         else:
-            console.print(f"[dim]  Queue size: {steering.queue_size()}[/dim]")
+            _print(f"[dim]  Queue size: {steering.queue_size()}[/dim]")
         return True
 
     if keyword == "/steer":
         if arg:
             steering.steer(arg)
-            console.print(Text.assemble(
+            _print(Text.assemble(
                 ("  ⇢ steer set  ", Style(color="magenta")),
                 (f'"{arg[:60]}"', Style(color="magenta", bold=True)),
             ))
         else:
-            console.print("[dim]  Usage: /steer <message>[/dim]")
+            _print("[dim]  Usage: /steer <message>[/dim]")
         return True
 
     if keyword == "/clear":
         if agent is not None:
             agent._context.restore([])
-            console.print(Text.assemble(
+            _print(Text.assemble(
                 ("  ✓ ", Style(color="green", bold=True)),
                 ("context cleared", Style(color="green")),
                 ("  — history wiped, system prompt kept", Style(dim=True)),
@@ -352,7 +386,7 @@ def _handle_slash(
             return True
         messages = agent._context.get_messages()
         tokens_before = agent._context.token_count()
-        console.print(Text.assemble(
+        _print(Text.assemble(
             ("  ⟳ ", Style(color="yellow", bold=True)),
             ("compacting context…", Style(color="yellow")),
             (f"  ({tokens_before:,} tokens)", Style(dim=True)),
@@ -365,32 +399,51 @@ def _handle_slash(
             tokens_after = agent._context.token_count()
             saved = tokens_before - tokens_after
             agent._session_manager.append_compaction(agent._session, entry)
-            console.print(Text.assemble(
+            _print(Text.assemble(
                 ("  ✓ ", Style(color="green", bold=True)),
                 ("context compacted", Style(color="green")),
                 (f"  {tokens_before:,} → {tokens_after:,} tokens", Style(dim=True)),
                 (f"  (saved {saved:,})", Style(color="green", dim=True)),
             ))
         except ValueError as exc:
-            console.print(f"[yellow dim]  ⚠ cannot compact: {exc}[/yellow dim]")
+            _print(f"[yellow dim]  ⚠ cannot compact: {exc}[/yellow dim]")
         except Exception as exc:
-            console.print(f"[red]  ✗ compaction failed: {exc}[/red]")
+            _print(f"[red]  ✗ compaction failed: {exc}[/red]")
         return True
 
     if keyword == "/model":
         if not arg:
             if agent is not None:
-                console.print(f"[dim]  Current model: [bold]{agent._config.model}[/bold][/dim]")
-                console.print("[dim]  Usage: /model <name>[/dim]")
+                _print(f"[dim]  Current model: [bold]{agent._config.model}[/bold][/dim]")
+                _print("[dim]  Usage: /model <name>[/dim]")
             return True
         if agent is not None:
             old_model = agent._config.model
             agent._config.model = arg
             agent._provider = _swap_provider(agent._config)
-            console.print(Text.assemble(
+            _print(Text.assemble(
                 ("  ✓ ", Style(color="green", bold=True)),
                 ("model swapped", Style(color="green")),
                 (f"  {old_model}", Style(dim=True)),
+                ("  →  ", Style(dim=True)),
+                (arg, Style(color="cyan", bold=True)),
+            ))
+        return True
+
+    if keyword == "/think":
+        levels = {"off", "minimal", "low", "medium", "high", "xhigh"}
+        if not arg or arg not in levels:
+            if agent is not None:
+                _print(f"[dim]  Current thinking level: [bold]{agent._config.thinking_level}[/bold][/dim]")
+                _print(f"[dim]  Usage: /think <{'|'.join(levels)}>[/dim]")
+            return True
+        if agent is not None:
+            old_level = agent._config.thinking_level
+            agent._config.thinking_level = arg
+            _print(Text.assemble(
+                ("  ✓ ", Style(color="green", bold=True)),
+                ("thinking level swapped", Style(color="green")),
+                (f"  {old_level}", Style(dim=True)),
                 ("  →  ", Style(dim=True)),
                 (arg, Style(color="cyan", bold=True)),
             ))
@@ -405,11 +458,23 @@ def _handle_slash(
             filled = int(bar_width * pct / 100)
             bar = "█" * filled + "░" * (bar_width - filled)
             colour = "green" if pct < 70 else "yellow" if pct < 90 else "red"
-            console.print(Text.assemble(
+            
+            tau_config = load_config()
+            cu = getattr(agent._session, "cumulative_usage", {})
+            class _DummyUsage:
+                input_tokens = cu.get("input_tokens", 0)
+                output_tokens = cu.get("output_tokens", 0)
+                cache_read_tokens = cu.get("cache_read_tokens", 0)
+                cache_write_tokens = cu.get("cache_write_tokens", 0)
+            
+            session_cost = tau_config.calculate_cost(agent._config.model, _DummyUsage())
+            cost_str = f"  (${session_cost:.3f})" if session_cost > 0 else ""
+
+            _print(Text.assemble(
                 ("  tokens  ", Style(dim=True)),
                 (f"[{bar}]", Style(color=colour)),
                 (f"  {used:,} / {budget:,}", Style(color=colour, bold=True)),
-                (f"  ({pct}%)", Style(dim=True)),
+                (f"  ({pct}%){cost_str}", Style(dim=True)),
             ))
         return True
 
@@ -445,46 +510,80 @@ def _repl(
     from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.document import Document
     from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.formatted_text import ANSI
     from prompt_toolkit.layout import Layout, HSplit, Window, ScrollablePane
     from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
     from prompt_toolkit.layout.processors import BeforeInput
+    from prompt_toolkit.data_structures import Point
 
     # -- state ---------------------------------------------------------------
     agent_running = threading.Event()
     app_ref: list[Application | None] = [None]
     output_text_parts: list[str] = []
 
+    # Shell confirmation synchronisation (agent thread ↔ UI thread)
+    confirm_pending = threading.Event()      # set while waiting for user answer
+    confirm_result: list[bool] = [False]     # shared slot for the answer
+    confirm_answered = threading.Event()     # agent thread blocks on this
+
+    # ANSI escape helpers
+    _BOLD = "\033[1m"
+    _CYAN = "\033[36m"
+    _MAGENTA = "\033[35m"
+    _DIM = "\033[2m"
+    _RESET = "\033[0m"
+
     header = (
-        f"tau v{_tau_version()}  {agent_config.provider}/{agent_config.model}"
-        f"  ·  exit or Ctrl-D to quit  ·  /help for commands\n"
-        + "═" * 60 + "\n"
+        f"{_BOLD}{_CYAN}tau v{_tau_version()}{_RESET}"
+        f"  {_MAGENTA}{agent_config.provider}/{agent_config.model}{_RESET}"
+        f"  {_DIM}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
+        + f"{_DIM}{'═' * 60}{_RESET}\n"
     )
     output_text_parts.append(header)
 
     # -- buffers -------------------------------------------------------------
-    output_buffer = Buffer(name="output", read_only=True)
-    output_buffer.set_document(
-        Document(header, len(header)), bypass_readonly=True
-    )
-
     input_buffer = Buffer(name="input")
 
     # -- helpers -------------------------------------------------------------
+    def _get_output_text() -> ANSI:
+        return ANSI("".join(output_text_parts))
+
+    def _get_cursor_position() -> Point:
+        # prompt_toolkit splits by \n, so y is exactly the number of \n characters.
+        y = sum(text.count('\n') for text in output_text_parts)
+        # Set x large enough so that when wrapping, prompt_toolkit keeps the END of the wrapped line visible!
+        return Point(x=999999, y=y)
+
     def _append_output(text: str) -> None:
         output_text_parts.append(text)
-        full = "".join(output_text_parts)
-        output_buffer.set_document(
-            Document(full, len(full)), bypass_readonly=True
-        )
         if app_ref[0]:
             app_ref[0].invalidate()
 
     def _get_prompt_prefix() -> list[tuple[str, str]]:
+        if confirm_pending.is_set():
+            return [("bold fg:ansiyellow", "allow? [y/N] ")]
         if agent_running.is_set():
             return [("bold fg:ansimagenta", "steer ")]
         return [("bold fg:ansicyan", "you ")]
 
     # -- agent runner --------------------------------------------------------
+    _YELLOW = "\033[33m"
+
+    def _tui_confirm(command: str) -> bool:
+        """Confirmation hook for TUI mode — posts the question to the output
+        buffer and waits for the user to type y/N in the input field."""
+        _append_output(
+            f"\n{_BOLD}{_YELLOW}  ⚠  tau wants to run:{_RESET}"
+            f"\n\n    {_CYAN}{command}{_RESET}\n\n"
+        )
+        confirm_answered.clear()
+        confirm_pending.set()
+        if app_ref[0]:
+            app_ref[0].invalidate()
+        # Block until the UI thread signals an answer
+        confirm_answered.wait()
+        return confirm_result[0]
+
     def _run_agent(user_input: str) -> None:
         agent_running.set()
         if app_ref[0]:
@@ -507,6 +606,15 @@ def _repl(
         text = input_buffer.text.strip()
         input_buffer.reset()
 
+        # If we're waiting for a shell confirmation answer, handle it here
+        if confirm_pending.is_set():
+            confirm_result[0] = text.lower() in ("y", "yes")
+            answer_display = "yes ✓" if confirm_result[0] else "no ✗"
+            _append_output(f"  → {answer_display}\n")
+            confirm_pending.clear()
+            confirm_answered.set()
+            return
+
         if not text:
             return
 
@@ -519,7 +627,7 @@ def _repl(
         # slash commands
         if text.startswith("/") and steering is not None:
             handled = _handle_slash(
-                text, steering, ext_registry, ext_context, agent=agent
+                text, steering, ext_registry, ext_context, agent=agent, output_fn=_append_output
             )
             if handled:
                 return
@@ -531,7 +639,7 @@ def _repl(
             return
 
         # new agent turn
-        _append_output(f"\nyou {text}\n" + "─" * 60 + "\n")
+        _append_output(f"\n{_BOLD}{_CYAN}you{_RESET} {text}\n" + f"{_DIM}{'─' * 60}{_RESET}\n")
         threading.Thread(
             target=_run_agent, args=(text,), daemon=True
         ).start()
@@ -553,6 +661,10 @@ def _repl(
         _append_output("\nGoodbye.\n")
         app_ref[0].exit()  # type: ignore[union-attr]
 
+    # -- wire TUI confirm hook into shell module -----------------------------
+    from tau.tools import shell as _shell_mod
+    _shell_mod._confirm_hook = _tui_confirm
+
     # -- layout --------------------------------------------------------------
     input_window = Window(
         content=BufferControl(
@@ -566,8 +678,13 @@ def _repl(
     layout = Layout(
         HSplit([
             Window(
-                content=BufferControl(buffer=output_buffer, focusable=False),
+                content=FormattedTextControl(
+                    _get_output_text,
+                    focusable=False,
+                    get_cursor_position=_get_cursor_position
+                ),
                 wrap_lines=True,
+                always_hide_cursor=True,
             ),
             Window(height=1, char="─", style="class:separator"),
             input_window,
@@ -610,6 +727,7 @@ def run_cmd(
     prompt: str | None,
     provider: str | None,
     model: str | None,
+    think: str | None,
     resume_id: str | None,
     session_name: str | None,
     no_confirm: bool,
@@ -620,7 +738,7 @@ def run_cmd(
     _setup_logging(verbose)
     ensure_tau_home()
     tau_config = load_config()
-    agent_config = _make_agent_config(tau_config, provider, model, no_confirm, workspace)
+    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace)
     session_manager = SessionManager()
     steering = SteeringChannel()
     agent, ext_registry = _build_agent(
@@ -701,7 +819,7 @@ def sessions_delete(session_id: str, yes: bool) -> None:
 @_agent_options
 def sessions_fork(
     session_id: str, message_index: int, name: str | None, resume: bool,
-    provider: str | None, model: str | None, resume_id: str | None,
+    provider: str | None, model: str | None, think: str | None, resume_id: str | None,
     session_name: str | None, no_confirm: bool, workspace: str, verbose: bool,
 ) -> None:
     sm = SessionManager()
@@ -722,7 +840,7 @@ def sessions_fork(
         _setup_logging(verbose)
         ensure_tau_home()
         tau_config = load_config()
-        agent_config = _make_agent_config(tau_config, provider, model, no_confirm, workspace)
+        agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace)
         steering = SteeringChannel()
         agent, ext_reg = _build_agent(
             tau_config=tau_config, agent_config=agent_config,

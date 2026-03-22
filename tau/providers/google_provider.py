@@ -37,6 +37,7 @@ class GoogleProvider:
         except ImportError as exc:
             raise ImportError("google-genai package is required: pip install google-genai") from exc
 
+        self._agent_config = agent_config
         self._model = agent_config.model
         self._client = genai.Client(api_key=config.google.api_key or None)
         self._gtypes = gtypes
@@ -60,6 +61,18 @@ class GoogleProvider:
             config_kwargs["system_instruction"] = system_prompt
         if google_tools:
             config_kwargs["tools"] = google_tools
+
+        if self._agent_config.thinking_level != "off":
+            budgets = {
+                "minimal": 1024,
+                "low": 2048,
+                "medium": 8192,
+                "high": 16384,
+                "xhigh": 32768,
+            }
+            budget = budgets.get(self._agent_config.thinking_level, 4096)
+            config_kwargs["thinking_config"] = {"thinking_budget_tokens": budget}
+
         gen_config = gtypes.GenerateContentConfig(**config_kwargs) if config_kwargs else None
 
         contents = history + [{"role": "user", "parts": [{"text": last_user}]}]

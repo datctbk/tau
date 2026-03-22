@@ -115,10 +115,12 @@ StopReason = Literal["end_turn", "tool_use", "max_tokens", "error"]
 class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
     @property
     def total(self) -> int:
-        return self.input_tokens + self.output_tokens
+        return self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
 
 
 @dataclass
@@ -137,6 +139,7 @@ class ProviderResponse:
 class AgentConfig:
     provider: str = "openai"
     model: str = "gpt-4o"
+    thinking_level: str = "off"
     max_tokens: int = 8192
     max_turns: int = 20
     system_prompt: str = (

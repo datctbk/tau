@@ -54,6 +54,14 @@ class Session:
     compactions: list[dict[str, Any]] = field(default_factory=list)  # compaction history
     parent_id: str | None = None    # set when forked
     fork_index: int | None = None   # message index forked after
+    cumulative_usage: dict[str, int] = field(
+        default_factory=lambda: {
+            "input_tokens": 0, 
+            "output_tokens": 0, 
+            "cache_read_tokens": 0, 
+            "cache_write_tokens": 0
+        }
+    )
 
     @property
     def meta(self) -> SessionMeta:
@@ -87,6 +95,7 @@ class Session:
             "compactions": self.compactions,
             "parent_id": self.parent_id,
             "fork_index": self.fork_index,
+            "cumulative_usage": self.cumulative_usage,
         }
 
     @classmethod
@@ -111,6 +120,9 @@ class Session:
             compactions=d.get("compactions", []),
             parent_id=d.get("parent_id"),
             fork_index=d.get("fork_index"),
+            cumulative_usage=d.get("cumulative_usage", {
+                "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0
+            }),
         )
 
 

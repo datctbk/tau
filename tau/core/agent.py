@@ -144,6 +144,14 @@ class Agent:
                 tool_calls=response.tool_calls or None,
             ))
 
+            # Accumulate usage
+            cu = getattr(self._session, "cumulative_usage", None)
+            if cu is not None:
+                cu["input_tokens"] += response.usage.input_tokens
+                cu["output_tokens"] += response.usage.output_tokens
+                cu["cache_read_tokens"] += response.usage.cache_read_tokens
+                cu["cache_write_tokens"] += response.usage.cache_write_tokens
+
             # Blocking mode (no streaming) — emit full text now
             if response.content and not had_deltas:
                 yield TextChunk(text=response.content)
