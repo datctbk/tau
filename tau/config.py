@@ -112,6 +112,8 @@ class TauConfig(BaseSettings):
         "Use the available tools to help the user with coding tasks. "
         "Be concise and precise."
     )
+    parallel_tools: bool = True
+    parallel_tools_max_workers: int = 8
 
     # provider sub-configs
     openai: OpenAIProviderConfig = OpenAIProviderConfig()
@@ -186,6 +188,10 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
         init["pricing"] = raw["pricing"]
     if "thinking_budgets" in raw:
         init["thinking_budgets"] = raw["thinking_budgets"]
+    if "parallel_tools" in raw:
+        init["parallel_tools"] = raw["parallel_tools"]
+    if "parallel_tools_max_workers" in raw:
+        init["parallel_tools_max_workers"] = raw["parallel_tools_max_workers"]
     return TauConfig(**init)
 
 

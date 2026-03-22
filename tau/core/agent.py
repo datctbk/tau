@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Generator, Iterator, TYPE_CHECKING
 
 from tau.core.types import (
@@ -101,6 +102,46 @@ class Agent:
         self._steering = steering
 
     # ------------------------------------------------------------------
+    # Tool dispatch (parallel or sequential)
+    # ------------------------------------------------------------------
+    def _dispatch_tools(
+        self, calls: list[ToolCall]
+    ) -> list[tuple[ToolCall, ToolResult]]:
+        """
+        Dispatch a batch of tool calls.
+        When parallel_tools is True (default) all calls run concurrently in a
+        thread pool; results are returned in the **original request order**.
+        Sequential fallback is used when the config disables parallelism or
+        only one call is present.
+        """
+        if not self._config.parallel_tools or len(calls) <= 1:
+            return [(call, self._registry.dispatch(call)) for call in calls]
+
+        max_workers = min(self._config.parallel_tools_max_workers, len(calls))
+        results: dict[int, ToolResult] = {}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_to_idx = {
+                pool.submit(self._registry.dispatch, call): idx
+                for idx, call in enumerate(calls)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    call = calls[idx]
+                    logger.exception("Parallel dispatch error for tool %r", call.name)
+                    results[idx] = ToolResult(
+                        tool_call_id=call.id,
+                        content=f"Error in tool {call.name!r}: {exc}",
+                        is_error=True,
+                    )
+
+        # Reconstruct in original order
+        return [(calls[i], results[i]) for i in range(len(calls))]
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -181,32 +222,43 @@ class Agent:
                     continue
                 return
 
-            # Dispatch each tool call
-            for call in response.tool_calls:
-                yield ToolCallEvent(call=call)
-
-                if self._ext_registry:
+            # ── Before-hooks (sequential, main thread) ────────────────
+            calls = response.tool_calls
+            blocked: dict[int, ToolResult] = {}   # idx → blocked result
+            if self._ext_registry:
+                for idx, call in enumerate(calls):
+                    yield ToolCallEvent(call=call)
                     ctx = BeforeToolCallContext(tool_call=call, agent=self)
                     res = self._ext_registry.fire_before_tool_call(ctx)
                     if res and res.block:
-                        from tau.core.types import ToolResult # ensure scope
                         err_msg = res.reason or f"Blocked by extension: {call.name}"
-                        result = ToolResult(tool_call_id=call.id, content=err_msg, is_error=True)
-                        yield ToolResultEvent(result=result)
-                        self._context.add_message(Message(
-                            role="tool",
-                            content=result.content,
-                            tool_call_id=result.tool_call_id,
-                            name=call.name,
-                        ))
-                        continue
+                        blocked[idx] = ToolResult(
+                            tool_call_id=call.id, content=err_msg, is_error=True
+                        )
+            else:
+                for call in calls:
+                    yield ToolCallEvent(call=call)
 
-                result = self._registry.dispatch(call)
+            # ── Parallel dispatch (only non-blocked calls) ─────────────
+            runnable_idx = [i for i in range(len(calls)) if i not in blocked]
+            runnable_calls = [calls[i] for i in runnable_idx]
 
-                if self._ext_registry:
+            if runnable_calls:
+                pairs = self._dispatch_tools(runnable_calls)
+                dispatched: dict[int, ToolResult] = {
+                    runnable_idx[j]: result for j, (_, result) in enumerate(pairs)
+                }
+            else:
+                dispatched = {}
+
+            # ── After-hooks + emit results (sequential, original order) ─
+            for idx, call in enumerate(calls):
+                result = blocked.get(idx) or dispatched.get(idx)
+                if result is None:
+                    continue  # should not happen
+                if self._ext_registry and idx not in blocked:
                     ctx_after = AfterToolCallContext(tool_call=call, result=result, agent=self)
                     self._ext_registry.fire_after_tool_call(ctx_after)
-
                 yield ToolResultEvent(result=result)
                 self._context.add_message(Message(
                     role="tool",
@@ -214,6 +266,10 @@ class Agent:
                     tool_call_id=result.tool_call_id,
                     name=call.name,
                 ))
+
+            parallel_count = len(runnable_calls)
+            if parallel_count > 1:
+                logger.debug("Ran %d tool calls in parallel", parallel_count)
 
             # Check compaction after tool round-trip (before next LLM call)
             yield from self._maybe_compact()

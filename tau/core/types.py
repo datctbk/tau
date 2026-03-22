@@ -186,6 +186,9 @@ class AgentConfig:
     retry_enabled: bool = True
     retry_max_attempts: int = 3
     retry_base_delay: float = 2.0   # seconds; doubles each attempt
+    # --- parallel tool execution ---
+    parallel_tools: bool = True          # run independent tool calls concurrently
+    parallel_tools_max_workers: int = 8  # thread-pool cap
 
 # ---------------------------------------------------------------------------
 # Compaction

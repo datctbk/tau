@@ -125,6 +125,18 @@ class Session:
             }),
         )
 
+    def snapshot_at(self, index: int) -> list[dict[str, Any]]:
+        """
+        Return a copy of messages[:index+1].
+        Used by /tree to restore context in-place without forking a file.
+        Raises ValueError for out-of-range index.
+        """
+        if index < 0 or index >= len(self.messages):
+            raise ValueError(
+                f"index {index} out of range (0–{len(self.messages) - 1})"
+            )
+        return [dict(m) for m in self.messages[: index + 1]]
+
 
 # ---------------------------------------------------------------------------
 # SessionManager

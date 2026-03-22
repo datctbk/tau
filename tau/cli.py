@@ -66,6 +66,7 @@ _AGENT_OPTIONS = [
     click.option("--session", "-s", "resume_id", default=None, help="Resume session by ID or prefix."),
     click.option("--session-name", default=None, help="Name for the new session."),
     click.option("--no-confirm", is_flag=True, default=False, help="Disable shell confirmation prompts."),
+    click.option("--no-parallel", is_flag=True, default=False, help="Disable parallel tool execution."),
     click.option("--workspace", "-w", default=".", show_default=True, help="Workspace root path."),
     click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging and show model thinking tokens."),
 ]
@@ -150,6 +151,7 @@ def _make_agent_config(
     think: str | None,
     no_confirm: bool,
     workspace: str,
+    no_parallel: bool = False,
 ) -> AgentConfig:
     if provider:
         tau_config.provider = provider
@@ -165,6 +167,8 @@ def _make_agent_config(
         system_prompt=tau_config.system_prompt,
         trim_strategy=tau_config.trim_strategy,
         workspace_root=str(Path(workspace).resolve()),
+        parallel_tools=tau_config.parallel_tools and not no_parallel,
+        parallel_tools_max_workers=tau_config.parallel_tools_max_workers,
     )
 
 # ---------------------------------------------------------------------------
@@ -315,9 +319,301 @@ _SLASH_HELP = (
     "  /model <name>  hot-swap the model for this session\n"
     "  /think <level> hot-swap the reasoning effort (off, low, medium, high)\n"
     "  /tokens        show current token usage\n"
+    "  /tree          browse & branch the session history in-place\n"
     "  /help          show this message\n"
     "  exit / Ctrl-D  quit"
 )
+
+# ---------------------------------------------------------------------------
+# /tree — in-place session branch navigator
+# ---------------------------------------------------------------------------
+
+# Role icons and colours used by the tree rows
+_TREE_ROLE_ICON: dict[str, str] = {
+    "user":      "▶",
+    "assistant": "◀",
+    "tool":      "⚙",
+    "system":    "⚑",
+}
+_TREE_ROLE_COLOUR: dict[str, str] = {
+    "user":      "\033[36m",   # cyan
+    "assistant": "\033[32m",   # green
+    "tool":      "\033[33m",   # yellow
+    "system":    "\033[2m",    # dim
+}
+_TREE_BOLD   = "\033[1m"
+_TREE_DIM    = "\033[2m"
+_TREE_RESET  = "\033[0m"
+_TREE_INVERT = "\033[7m"       # selected-row highlight
+_TREE_CYAN   = "\033[36m"
+_TREE_RED    = "\033[31m"
+_TREE_GREEN  = "\033[32m"
+
+
+def _tree_navigator(agent: "Agent", output_fn: "Callable[[str], None]") -> None:
+    """
+    Full-screen, keyboard-driven branch navigator.
+
+    Renders a scrollable list of every message in the current session.
+    Keys
+    ────
+      ↑ / k      move cursor up
+      ↓ / j      move cursor down
+      Enter       branch: restore context to the selected message index
+                  (forks to a new saved session, then replaces the live context)
+      f           fork only: save a new session file at the selected point
+                  without touching the live context
+      Escape / q  cancel and return to the REPL
+
+    The navigator runs as a *blocking* prompt_toolkit Application that takes
+    over the full screen, just like the REPL itself.  On exit it hands control
+    back to the surrounding REPL application.
+    """
+    from prompt_toolkit import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, HSplit, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.formatted_text import ANSI
+
+    messages = agent._session.messages
+    if not messages:
+        output_fn("  [dim]  /tree  — no messages in session yet.[/dim]\n")
+        return
+
+    total = len(messages)
+    cursor: list[int] = [total - 1]   # start at the bottom (most recent)
+    status: list[str] = [""]          # one-line status shown at bottom
+
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    def _row(idx: int, selected: bool) -> str:
+        msg    = messages[idx]
+        role   = msg.get("role", "?")
+        icon   = _TREE_ROLE_ICON.get(role, "?")
+        colour = _TREE_ROLE_COLOUR.get(role, "")
+        # content preview: first non-empty line, max 72 chars
+        raw = msg.get("content") or ""
+        if isinstance(raw, list):          # multipart (e.g. vision)
+            raw = " ".join(
+                p.get("text", "") for p in raw if isinstance(p, dict)
+            )
+        preview = raw.replace("\n", " ").strip()[:72]
+        # tool-call badge
+        badge = ""
+        if msg.get("tool_calls"):
+            n = len(msg["tool_calls"])
+            badge = f" {_TREE_DIM}[{n} tool{'s' if n != 1 else ''}]{_TREE_RESET}"
+        if msg.get("tool_call_id"):
+            badge = f" {_TREE_DIM}[tool result]{_TREE_RESET}"
+
+        index_str = f"{idx:3}"
+        line = (
+            f"  {_TREE_DIM}{index_str}{_TREE_RESET} "
+            f"{colour}{icon} {preview}{_TREE_RESET}"
+            f"{badge}"
+        )
+        if selected:
+            # Strip existing ANSI before inverting so colours don't bleed
+            line = f"{_TREE_INVERT}{_TREE_BOLD}  {index_str} {icon} {preview}{_TREE_RESET}"
+        return line + "\n"
+
+    def _header() -> str:
+        n = len(messages)
+        return (
+            f"{_TREE_BOLD}{_TREE_CYAN}  ⎇  session tree{_TREE_RESET}"
+            f"  {_TREE_DIM}{n} message{'s' if n != 1 else ''}"
+            f"  ·  ↑↓ navigate  ·  Enter branch  ·  f fork-only  ·  Esc cancel"
+            f"{_TREE_RESET}\n"
+            f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
+        )
+
+    def _footer() -> str:
+        s = status[0]
+        if not s:
+            idx = cursor[0]
+            msg = messages[idx]
+            role = msg.get("role", "?")
+            raw = (msg.get("content") or "").replace("\n", " ").strip()
+            return (
+                f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
+                f"  {_TREE_DIM}[{idx}] {role}  {raw[:80]}{_TREE_RESET}\n"
+            )
+        return (
+            f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
+            f"  {s}\n"
+        )
+
+    def _build_text() -> ANSI:
+        parts = [_header()]
+        for i in range(total):
+            parts.append(_row(i, i == cursor[0]))
+        parts.append(_footer())
+        return ANSI("".join(parts))
+
+    # ── key bindings ─────────────────────────────────────────────────────
+
+    kb    = KeyBindings()
+    result: list[str | None] = [None]   # "branch" | "fork" | None (cancel)
+    app_ref: list[Application | None] = [None]
+
+    def _move(delta: int) -> None:
+        cursor[0] = max(0, min(total - 1, cursor[0] + delta))
+        status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("up")
+    @kb.add("k")
+    def _up(_: object) -> None:
+        _move(-1)
+
+    @kb.add("down")
+    @kb.add("j")
+    def _down(_: object) -> None:
+        _move(1)
+
+    @kb.add("pageup")
+    def _pgup(_: object) -> None:
+        _move(-10)
+
+    @kb.add("pagedown")
+    def _pgdn(_: object) -> None:
+        _move(10)
+
+    @kb.add("home")
+    @kb.add("g")
+    def _home(_: object) -> None:
+        cursor[0] = 0
+        status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("end")
+    @kb.add("G")
+    def _end(_: object) -> None:
+        cursor[0] = total - 1
+        status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("enter")
+    def _branch(_: object) -> None:
+        result[0] = "branch"
+        if app_ref[0]:
+            app_ref[0].exit()
+
+    @kb.add("f")
+    def _fork_only(_: object) -> None:
+        result[0] = "fork"
+        if app_ref[0]:
+            app_ref[0].exit()
+
+    @kb.add("escape")
+    @kb.add("q")
+    @kb.add("c-c")
+    def _cancel(_: object) -> None:
+        result[0] = None
+        if app_ref[0]:
+            app_ref[0].exit()
+
+    # ── layout ───────────────────────────────────────────────────────────
+
+    layout = Layout(
+        HSplit([
+            Window(
+                content=FormattedTextControl(_build_text, focusable=True),
+                wrap_lines=False,
+            ),
+        ])
+    )
+
+    app: Application[None] = Application(
+        layout=layout,
+        key_bindings=kb,
+        full_screen=True,
+        mouse_support=False,
+    )
+    app_ref[0] = app
+
+    # ── run ──────────────────────────────────────────────────────────────
+    # _tree_navigator is called from a *synchronous* key-binding handler
+    # (prompt_toolkit's _call_handler never awaits its handlers).
+    # The outer REPL Application owns the running asyncio event loop on the
+    # main thread, so we cannot call asyncio.run() or loop.run_until_complete()
+    # here — both raise "cannot be called from a running event loop".
+    #
+    # Solution: spin up a dedicated daemon thread with its own fresh event
+    # loop, run the tree Application there, and block the main thread with a
+    # threading.Event until the tree app exits.  The tree app renders to the
+    # same terminal fd — prompt_toolkit handles that correctly as long as only
+    # one Application is drawing at a time (the outer REPL is blocked/idle
+    # while we wait on the Event).
+    import threading as _threading
+
+    _done = _threading.Event()
+    _exc: list[BaseException] = []
+
+    def _run_in_thread() -> None:
+        import asyncio as _asyncio
+        loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(app.run_async())
+        except Exception as e:  # noqa: BLE001
+            _exc.append(e)
+        finally:
+            loop.close()
+            _done.set()
+
+    t = _threading.Thread(target=_run_in_thread, daemon=True)
+    t.start()
+    _done.wait()   # block the main thread (key-binding handler) until tree exits
+
+    if _exc:
+        output_fn(f"  \033[31m✗ /tree error: {_exc[0]}\033[0m\n")
+        return
+
+    # ── act on the user's choice ─────────────────────────────────────────
+
+    chosen_idx = cursor[0]
+    action     = result[0]
+
+    if action is None:
+        output_fn(f"  {_TREE_DIM}/tree cancelled{_TREE_RESET}\n")
+        return
+
+    # Always persist a fork so the old history is safe
+    sm     = agent._session_manager
+    forked = sm.fork(agent._session.id, chosen_idx)
+
+    if action == "fork":
+        output_fn(
+            f"  {_TREE_GREEN}✓ forked{_TREE_RESET}"
+            f"  session {_TREE_CYAN}{forked.id[:8]}{_TREE_RESET}"
+            f"  {_TREE_DIM}({len(forked.messages)} msgs — live context unchanged){_TREE_RESET}\n"
+        )
+        return
+
+    # action == "branch": replace live context with the snapshot
+    snapshot = agent._session.snapshot_at(chosen_idx)
+    agent._context.restore(snapshot)
+
+    # Reset compactor overflow flag so the new (smaller) context is clean
+    agent._context.compactor.reset_overflow_flag()
+
+    # Update the live session to point at the fork
+    agent._session = forked
+
+    output_fn(
+        f"  {_TREE_GREEN}⎇  branched{_TREE_RESET}"
+        f"  {_TREE_DIM}context rolled back to message [{chosen_idx}]"
+        f"  —  old history saved as {forked.id[:8]}{_TREE_RESET}\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Slash-command dispatcher
+# ---------------------------------------------------------------------------
 
 def _handle_slash(
     cmd: str,
@@ -328,6 +624,8 @@ def _handle_slash(
     output_fn: Callable[[str], None] | None = None,
     staged_images: list[str] | None = None,
 ) -> bool:
+    from typing import Any
+
     def _print(renderable: Any) -> None:
         if output_fn:
             import io
@@ -337,9 +635,10 @@ def _handle_slash(
             output_fn(f.getvalue())
         else:
             console.print(renderable)
-    parts = cmd.split(None, 1)
+
+    parts   = cmd.split(None, 1)
     keyword = parts[0].lower()
-    arg = parts[1].strip() if len(parts) > 1 else ""
+    arg     = parts[1].strip() if len(parts) > 1 else ""
 
     if keyword == "/help":
         help_text = _SLASH_HELP
@@ -493,6 +792,16 @@ def _handle_slash(
                 (f"  {used:,} / {budget:,}", Style(color=colour, bold=True)),
                 (f"  ({pct}%){cost_str}", Style(dim=True)),
             ))
+        return True
+
+    if keyword == "/tree":
+        if agent is None:
+            _print("[dim]  /tree requires an active session.[/dim]")
+            return True
+        if output_fn is None:
+            _print("[dim]  /tree is only available inside the interactive REPL.[/dim]")
+            return True
+        _tree_navigator(agent, output_fn)
         return True
 
     if ext_registry is not None and ext_context is not None:
@@ -754,6 +1063,7 @@ def run_cmd(
     resume_id: str | None,
     session_name: str | None,
     no_confirm: bool,
+    no_parallel: bool,
     workspace: str,
     verbose: bool,
 ) -> None:
@@ -761,7 +1071,7 @@ def run_cmd(
     _setup_logging(verbose)
     ensure_tau_home()
     tau_config = load_config()
-    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace)
+    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel)
     session_manager = SessionManager()
     steering = SteeringChannel()
     agent, ext_registry = _build_agent(
@@ -843,7 +1153,7 @@ def sessions_delete(session_id: str, yes: bool) -> None:
 def sessions_fork(
     session_id: str, message_index: int, name: str | None, resume: bool,
     provider: str | None, model: str | None, think: str | None, image: tuple[str, ...], resume_id: str | None,
-    session_name: str | None, no_confirm: bool, workspace: str, verbose: bool,
+    session_name: str | None, no_confirm: bool, no_parallel: bool, workspace: str, verbose: bool,
 ) -> None:
     sm = SessionManager()
     try:
@@ -863,7 +1173,7 @@ def sessions_fork(
         _setup_logging(verbose)
         ensure_tau_home()
         tau_config = load_config()
-        agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace)
+        agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel)
         steering = SteeringChannel()
         agent, ext_reg = _build_agent(
             tau_config=tau_config, agent_config=agent_config,
