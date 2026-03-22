@@ -157,6 +157,15 @@ class ExtensionRegistry:
             self._search_paths.append(_builtin_dir)
             self._search_paths.append(TAU_HOME / "extensions")
 
+        # Auto-discover extensions from installed packages
+        try:
+            from tau.packages import PackageManager
+            pm = PackageManager()
+            for pkg_path in pm.get_extension_paths():
+                self._search_paths.append(Path(pkg_path))
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not load package manager paths (not fatal).")
+
         for p in (extra_paths or []):
             self._search_paths.append(Path(p).expanduser())
 

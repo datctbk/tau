@@ -99,6 +99,11 @@ def _build_agent(
         ollama_model=agent_config.model,
     )
     context = ContextManager(agent_config)
+    # Load AGENTS.md / CLAUDE.md context files
+    from tau.context_files import load_context_files
+    context_text = load_context_files(agent_config.workspace_root)
+    if context_text:
+        context.inject_prompt_fragment(context_text)
     loader = SkillLoader(
         extra_paths=tau_config.skills.paths,
         disabled=tau_config.skills.disabled,
@@ -830,6 +835,86 @@ def extensions_show(name: str) -> None:
         + (f"[bold]Prompt frag:[/bold] yes\n" if m.system_prompt_fragment else ""),
         title=f"Extension: {m.name}", border_style="cyan",
     ))
+
+@extensions_group.command("install")
+@click.argument("source")
+def extensions_install(source: str) -> None:
+    """Install an extension package.
+
+    SOURCE is 'git:<url>' or 'pip:<package>'.
+
+    Examples:
+      tau extensions install git:https://github.com/user/my-ext
+      tau extensions install pip:tau-ext-foobar
+    """
+    ensure_tau_home()
+    from tau.packages import PackageManager, PackageError
+    pm = PackageManager()
+    try:
+        pkg = pm.install(source)
+        console.print(Text.assemble(
+            ("  ✓ ", Style(color="green", bold=True)),
+            ("installed ", Style(color="green")),
+            (pkg.name, Style(color="cyan", bold=True)),
+            (f"  ({pkg.version})", Style(dim=True)),
+        ))
+        console.print(f"[dim]    → {pkg.install_path}[/dim]")
+        console.print(
+            "[yellow dim]  ⚠ Third-party packages run with full system access. "
+            "Review source before use.[/yellow dim]"
+        )
+    except PackageError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+
+
+@extensions_group.command("remove")
+@click.argument("name")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation.")
+def extensions_remove(name: str, yes: bool) -> None:
+    """Remove an installed extension package by name."""
+    ensure_tau_home()
+    from tau.packages import PackageManager, PackageNotFoundError
+    pm = PackageManager()
+    if not yes:
+        click.confirm(f"Remove extension package {name!r}?", abort=True)
+    try:
+        pm.remove(name)
+        console.print(Text.assemble(
+            ("  ✓ ", Style(color="green", bold=True)),
+            ("removed ", Style(color="green")),
+            (name, Style(color="cyan", bold=True)),
+        ))
+    except PackageNotFoundError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+
+
+@extensions_group.command("update")
+@click.argument("name", required=False)
+def extensions_update(name: str | None) -> None:
+    """Update installed extension packages.
+
+    If NAME is given, update only that package. Otherwise update all.
+    """
+    ensure_tau_home()
+    from tau.packages import PackageManager, PackageNotFoundError
+    pm = PackageManager()
+    try:
+        updated = pm.update(name)
+    except PackageNotFoundError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+    if updated:
+        for pkg_name in updated:
+            console.print(Text.assemble(
+                ("  ✓ ", Style(color="green", bold=True)),
+                ("updated ", Style(color="green")),
+                (pkg_name, Style(color="cyan", bold=True)),
+            ))
+    else:
+        console.print("[dim]  No packages to update.[/dim]")
+
 
 # ---------------------------------------------------------------------------
 # `tau config` subcommands

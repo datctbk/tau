@@ -141,7 +141,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
 
 def ensure_tau_home() -> None:
     """Create ~/.tau and its sub-directories if they don't exist."""
-    for subdir in ("", "sessions", "skills", "extensions"):
+    for subdir in ("", "sessions", "skills", "extensions", "packages"):
         (TAU_HOME / subdir).mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(
