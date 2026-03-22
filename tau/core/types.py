@@ -300,15 +300,17 @@ class ExtensionLoadError:
     error: str
 
 
-Event = (
-    TextChunk
-    | TextDelta
-    | ToolCallEvent
-    | ToolResultEvent
-    | TurnComplete
-    | ErrorEvent
-    | CompactionEvent
-    | RetryEvent
-    | SteerEvent
-    | ExtensionLoadError
-)
+from typing import Union
+
+Event = Union[
+    TextChunk,
+    TextDelta,
+    ToolCallEvent,
+    ToolResultEvent,
+    TurnComplete,
+    ErrorEvent,
+    CompactionEvent,
+    RetryEvent,
+    SteerEvent,
+    ExtensionLoadError,
+]

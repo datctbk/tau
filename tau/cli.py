@@ -67,6 +67,7 @@ _AGENT_OPTIONS = [
     click.option("--session-name", default=None, help="Name for the new session."),
     click.option("--no-confirm", is_flag=True, default=False, help="Disable shell confirmation prompts."),
     click.option("--no-parallel", is_flag=True, default=False, help="Disable parallel tool execution."),
+    click.option("--persistent-shell", is_flag=True, default=False, help="Use a persistent bash session across turns."),
     click.option("--workspace", "-w", default=".", show_default=True, help="Workspace root path."),
     click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging and show model thinking tokens."),
 ]
@@ -94,6 +95,7 @@ def _build_agent(
         require_confirmation=tau_config.shell.require_confirmation,
         timeout=tau_config.shell.timeout,
         allowed_commands=tau_config.shell.allowed_commands,
+        use_persistent_shell=tau_config.shell.use_persistent_shell,
         confirm_hook=confirm_hook,
     )
     configure_fs(workspace_root=agent_config.workspace_root)
@@ -152,11 +154,14 @@ def _make_agent_config(
     no_confirm: bool,
     workspace: str,
     no_parallel: bool = False,
+    persistent_shell: bool = False,
 ) -> AgentConfig:
     if provider:
         tau_config.provider = provider
     if no_confirm:
         tau_config.shell.require_confirmation = False
+    if persistent_shell:
+        tau_config.shell.use_persistent_shell = True
     return AgentConfig(
         provider=tau_config.provider,
         model=model or tau_config.model,
@@ -1064,6 +1069,7 @@ def run_cmd(
     session_name: str | None,
     no_confirm: bool,
     no_parallel: bool,
+    persistent_shell: bool,
     workspace: str,
     verbose: bool,
 ) -> None:
@@ -1071,7 +1077,7 @@ def run_cmd(
     _setup_logging(verbose)
     ensure_tau_home()
     tau_config = load_config()
-    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel)
+    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, persistent_shell)
     session_manager = SessionManager()
     steering = SteeringChannel()
     agent, ext_registry = _build_agent(

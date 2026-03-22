@@ -16,7 +16,86 @@ _shell_config: dict[str, Any] = {
     "require_confirmation": True,
     "timeout": 30,
     "allowed_commands": [],
+    "use_persistent_shell": False,
 }
+
+_persistent_shell: PersistentShell | None = None
+
+
+class PersistentShell:
+    """Manages a long-running bash process across turn boundaries."""
+
+    def __init__(self, timeout: int = 30) -> None:
+        self.timeout = timeout
+        import uuid
+        self._sentinel = f"__TAU_CMD_DONE_{uuid.uuid4()}__"
+        self._process = subprocess.Popen(
+            ["bash", "--noprofile", "--norc", "-i"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        # Flush the initial interactive bash prompt
+        self._execute("echo started")
+
+    def execute(self, command: str, workdir: str | None = None) -> str:
+        if self._process.poll() is not None:
+            # Shell died — restart it
+            self.__init__(self.timeout)
+
+        full_cmd = command
+        if workdir and workdir != ".":
+            full_cmd = f"cd {shlex.quote(workdir)} && {command}"
+
+        # We wrap the command to emit the sentinel even if it fails
+        # and to capture the exit code.
+        wrapped = f" {full_cmd}; echo \"\\n[exit $?]\\n{self._sentinel}\"\n"
+        
+        try:
+            self._process.stdin.write(wrapped)
+            self._process.stdin.flush()
+        except BrokenPipeError:
+            self.__init__(self.timeout)
+            self._process.stdin.write(wrapped)
+            self._process.stdin.flush()
+
+        output_lines: list[str] = []
+        found_command_echo = False
+        while True:
+            line = self._process.stdout.readline()
+            if not line:
+                break
+            if self._sentinel in line:
+                break
+            
+            # Skip the echoed command if it shows up in the stream
+            if not found_command_echo and full_cmd in line:
+                found_command_echo = True
+                continue
+            
+            output_lines.append(line)
+
+        # Cleanup: remove leading bash prompts and trailing whitespace
+        res = "".join(output_lines).strip()
+        # Remove any leading "bash-X.X$ " prompt if it leaked
+        import re
+        res = re.sub(r'^bash-[0-9.]+[$#] ', '', res)
+        return res.strip()
+
+    def _execute(self, command: str) -> None:
+        """Internal low-level execute without exit-code wrapping."""
+        self._process.stdin.write(f"{command}; echo {self._sentinel}\n")
+        self._process.stdin.flush()
+        while True:
+            line = self._process.stdout.readline()
+            if not line or self._sentinel in line:
+                break
+
+    def __del__(self) -> None:
+        if hasattr(self, "_process") and self._process.poll() is None:
+            self._process.terminate()
 
 # Pluggable confirmation hook — CLI replaces this so it can flush the
 # in-progress stream to stdout before showing the prompt.
@@ -27,11 +106,13 @@ def configure_shell(
     require_confirmation: bool,
     timeout: int,
     allowed_commands: list[str],
+    use_persistent_shell: bool = False,
     confirm_hook: Callable[[str], bool] | None = None,
 ) -> None:
     _shell_config["require_confirmation"] = require_confirmation
     _shell_config["timeout"] = timeout
     _shell_config["allowed_commands"] = allowed_commands
+    _shell_config["use_persistent_shell"] = use_persistent_shell
     global _confirm_hook
     _confirm_hook = confirm_hook
 
@@ -60,7 +141,13 @@ def run_bash(command: str, workdir: str = ".") -> str:
         if not confirm(command):
             return "Cancelled by user."
 
-    logger.debug("run_bash: %s", command)
+    if _shell_config.get("use_persistent_shell"):
+        global _persistent_shell
+        if _persistent_shell is None:
+            _persistent_shell = PersistentShell(timeout=_shell_config["timeout"])
+        return _persistent_shell.execute(command, workdir=workdir)
+
+    logger.debug("run_bash (ephemeral): %s", command)
     try:
         result = subprocess.run(
             command,

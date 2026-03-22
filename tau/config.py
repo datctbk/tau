@@ -56,6 +56,7 @@ class ShellToolConfig(BaseSettings):
     require_confirmation: bool = True
     timeout: int = 30
     allowed_commands: list[str] = []   # empty = allow all
+    use_persistent_shell: bool = False
 
 
 class SkillsConfig(BaseSettings):
