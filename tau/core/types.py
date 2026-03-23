@@ -107,6 +107,9 @@ class ToolResult:
     content: str
     is_error: bool = False
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"tool_call_id": self.tool_call_id, "content": self.content, "is_error": self.is_error}
+
 
 # ---------------------------------------------------------------------------
 # Agent Hooks
@@ -150,6 +153,14 @@ class TokenUsage:
     @property
     def total(self) -> int:
         return self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+        }
 
 
 @dataclass
@@ -211,6 +222,15 @@ class RetryEvent:
     delay: float          # seconds the agent will wait before retrying
     error: str            # the error message that triggered the retry
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": "retry",
+            "attempt": self.attempt,
+            "max_attempts": self.max_attempts,
+            "delay": self.delay,
+            "error": self.error,
+        }
+
 # ---------------------------------------------------------------------------
 # Session branching
 # ---------------------------------------------------------------------------
@@ -228,6 +248,9 @@ class ForkInfo:
 class TextChunk:
     text: str
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "text_chunk", "text": self.text}
+
 
 @dataclass
 class TextDelta:
@@ -235,25 +258,40 @@ class TextDelta:
     text: str
     is_thinking: bool = False
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "text_delta", "text": self.text, "is_thinking": self.is_thinking}
+
 
 @dataclass
 class ToolCallEvent:
     call: ToolCall
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "tool_call", "call": self.call.to_dict()}
 
 
 @dataclass
 class ToolResultEvent:
     result: ToolResult
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "tool_result", "result": self.result.to_dict()}
+
 
 @dataclass
 class TurnComplete:
     usage: TokenUsage
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "turn_complete", "usage": self.usage.to_dict()}
+
 
 @dataclass
 class ErrorEvent:
     message: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "error", "message": self.message}
 
 
 @dataclass
@@ -265,11 +303,24 @@ class CompactionEvent:
     summary: str = ""
     error: str = ""
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": "compaction",
+            "stage": self.stage,
+            "tokens_before": self.tokens_before,
+            "tokens_after": self.tokens_after,
+            "summary": self.summary,
+            "error": self.error,
+        }
+
 @dataclass
 class SteerEvent:
     """Emitted when the user steers mid-stream (current response discarded)."""
     new_input: str          # the injected user message
     discarded_tokens: int   # how many tokens of the interrupted response were dropped
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "steer", "new_input": self.new_input, "discarded_tokens": self.discarded_tokens}
 
 # ---------------------------------------------------------------------------
 # Extension system
@@ -298,6 +349,9 @@ class ExtensionLoadError:
     """Emitted (as an Event) when an extension fails to load at startup."""
     extension_name: str
     error: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "extension_load_error", "extension_name": self.extension_name, "error": self.error}
 
 
 from typing import Union

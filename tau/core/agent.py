@@ -20,7 +20,6 @@ from tau.core.types import (
     TextDelta,
     ToolCall,
     ToolCallEvent,
-    ToolCallEvent,
     ToolResultEvent,
     TurnComplete,
     BeforeToolCallContext,

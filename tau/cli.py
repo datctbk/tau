@@ -1,5 +1,6 @@
 """tau CLI — entry point, REPL, and single-shot mode."""
 from __future__ import annotations
+import json
 import logging
 import sys
 import threading
@@ -70,6 +71,8 @@ _AGENT_OPTIONS = [
     click.option("--persistent-shell", is_flag=True, default=False, help="Use a persistent bash session across turns."),
     click.option("--workspace", "-w", default=".", show_default=True, help="Workspace root path."),
     click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging and show model thinking tokens."),
+    click.option("--mode", "output_mode", type=click.Choice(["interactive", "print", "json"]), default=None, help="Output mode: interactive (REPL), print (text only), json (JSONL events)."),
+    click.option("--print", "-P", "print_mode", is_flag=True, default=False, help="Shorthand for --mode print."),
 ]
 
 def _agent_options(fn):
@@ -311,6 +314,59 @@ def _render_events(
             _flush_stream(end_line=False)
             _writeln(f"Error: {event.message}")
     _flush_stream(end_line=True)
+
+# ---------------------------------------------------------------------------
+# Non-interactive renderers
+# ---------------------------------------------------------------------------
+def _render_events_print(
+    agent: Agent,
+    user_input: str,
+    images: list[str] | None = None,
+    ext_registry: ExtensionRegistry | None = None,
+) -> None:
+    """Print mode: collect only assistant text, output it to stdout, then exit."""
+    text_parts: list[str] = []
+    exit_code = 0
+    for event in agent.run(user_input, images=images):
+        if ext_registry is not None:
+            ext_registry.fire_hooks(event)
+        if isinstance(event, TextDelta):
+            if not event.is_thinking:
+                text_parts.append(event.text)
+        elif isinstance(event, TextChunk):
+            text_parts.append(event.text)
+        elif isinstance(event, ErrorEvent):
+            print(event.message, file=sys.stderr)
+            exit_code = 1
+    output = "".join(text_parts)
+    if output:
+        sys.stdout.write(output)
+        if not output.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+    if exit_code:
+        sys.exit(exit_code)
+
+
+def _render_events_json(
+    agent: Agent,
+    user_input: str,
+    images: list[str] | None = None,
+    ext_registry: ExtensionRegistry | None = None,
+) -> None:
+    """JSON mode: emit each event as a JSON line to stdout (JSONL)."""
+    exit_code = 0
+    for event in agent.run(user_input, images=images):
+        if ext_registry is not None:
+            ext_registry.fire_hooks(event)
+        if isinstance(event, ErrorEvent):
+            exit_code = 1
+        sys.stdout.write(json.dumps(event.to_dict(), ensure_ascii=False))
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    if exit_code:
+        sys.exit(exit_code)
+
 
 # ---------------------------------------------------------------------------
 # REPL
@@ -1072,14 +1128,37 @@ def run_cmd(
     persistent_shell: bool,
     workspace: str,
     verbose: bool,
+    output_mode: str | None,
+    print_mode: bool,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
+    # Resolve output mode: --print flag takes precedence as shorthand
+    mode = output_mode
+    if print_mode:
+        mode = "print"
+
+    # Support piped stdin: if no prompt and stdin is not a TTY, read from stdin
+    if not prompt and not sys.stdin.isatty():
+        prompt = sys.stdin.read().strip()
+        if not prompt:
+            click.echo("Error: no prompt provided via argument or stdin.", err=True)
+            sys.exit(1)
+        # Default to print mode when piped, unless --mode was explicit
+        if mode is None:
+            mode = "print"
+
     _setup_logging(verbose)
     ensure_tau_home()
     tau_config = load_config()
     agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, persistent_shell)
     session_manager = SessionManager()
     steering = SteeringChannel()
+
+    # Non-interactive modes disable shell confirmation
+    confirm_hook = None
+    if mode in ("print", "json"):
+        tau_config.shell.require_confirmation = False
+
     agent, ext_registry = _build_agent(
         tau_config=tau_config,
         agent_config=agent_config,
@@ -1088,7 +1167,18 @@ def run_cmd(
         resume_id=resume_id,
         steering=steering,
     )
-    if prompt:
+
+    if mode == "json":
+        if not prompt:
+            click.echo("Error: --mode json requires a prompt.", err=True)
+            sys.exit(1)
+        _render_events_json(agent, prompt, images=list(image) if image else None, ext_registry=ext_registry)
+    elif mode == "print":
+        if not prompt:
+            click.echo("Error: --mode print requires a prompt.", err=True)
+            sys.exit(1)
+        _render_events_print(agent, prompt, images=list(image) if image else None, ext_registry=ext_registry)
+    elif prompt:
         _render_events(agent, prompt, verbose, images=list(image) if image else None, ext_registry=ext_registry)
     else:
         _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None)
@@ -1159,7 +1249,8 @@ def sessions_delete(session_id: str, yes: bool) -> None:
 def sessions_fork(
     session_id: str, message_index: int, name: str | None, resume: bool,
     provider: str | None, model: str | None, think: str | None, image: tuple[str, ...], resume_id: str | None,
-    session_name: str | None, no_confirm: bool, no_parallel: bool, workspace: str, verbose: bool,
+    session_name: str | None, no_confirm: bool, no_parallel: bool, persistent_shell: bool, workspace: str, verbose: bool,
+    output_mode: str | None, print_mode: bool,
 ) -> None:
     sm = SessionManager()
     try:
