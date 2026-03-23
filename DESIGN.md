@@ -92,6 +92,12 @@ tau/
 │   │   ├── __init__.py          # SkillLoader
 │   │   └── example_skill/
 │   │
+│   ├── editor.py                # @file expansion, tab completion, image paste, !shell
+│   ├── prompts.py               # prompt template discovery + rendering
+│   ├── context_files.py         # AGENTS.md / CLAUDE.md / .tau/SYSTEM.md loading
+│   ├── sdk.py                   # programmatic API (TauSession, create_session, InMemorySessionManager)
+│   ├── rpc.py                   # JSONL-over-stdio RPC protocol for process integration
+│   │
 │   └── extensions/              # built-in extension system
 │       ├── __init__.py
 │       ├── word_count.py        # reference: tool + /wc slash command
@@ -436,6 +442,40 @@ Extension slash commands are auto-listed in `/help` and routed via `ExtensionReg
 
 ---
 
+### 5.1 `editor.py` — Editor Richness
+
+The `editor` module provides four REPL enhancements:
+
+| Feature | Trigger | Scope |
+|---------|---------|-------|
+| **@file references** | `@path/to/file` in prompt text | REPL + single-shot |
+| **Tab completion** | `Tab` key in REPL | REPL only |
+| **Image paste** | `Ctrl-V` in REPL (macOS) | REPL only |
+| **Inline shell** | `!command` in REPL | REPL only |
+
+**@file expansion** — `expand_at_files(text, workspace_root)`:
+- Regex `@path` matches against real files inside the workspace.
+- Matched files are read and replaced with `<file path="...">contents</file>` blocks.
+- Files outside the workspace are blocked (left as-is). Files > 256 KB are skipped.
+- Non-existent `@references` pass through unchanged so the LLM can still interpret them.
+
+**Tab completer** — `_TauCompleter` (prompt_toolkit `Completer`):
+- `/` prefix → slash command completion (built-in + extension commands).
+- `@` prefix → filesystem path completion within the workspace.
+- Hidden (dotfiles) only shown when the typed prefix starts with `.`.
+
+**Image paste** — `Ctrl-V` handler:
+- On macOS, uses AppleScript to extract clipboard PNG data to a temp file.
+- Falls back to normal paste if no image is in the clipboard.
+- Stages the image via `_staged_images`, same as `/image <path>`.
+
+**Inline shell** — `!command`:
+- Runs via `subprocess.run()` in the workspace directory.
+- Output displayed directly in the REPL, bypasses the agent.
+- 30-second timeout by default.
+
+---
+
 ## 6. Configuration (`config.py`)
 
 Config file: `~/.tau/config.toml`
@@ -604,5 +644,9 @@ No LangChain, no heavy framework. The core is hand-rolled and stays under ~2 klo
 | **Extension system** | ✅ done | `test_extensions.py` (72 tests) |
 | Legacy skills system | ✅ done | — |
 | `tau extensions list/show` CLI commands | ✅ done | — |
+| **Output modes** (print / JSON / piped stdin) | ✅ done | `test_output_modes.py` |
+| **System prompt override** (`.tau/SYSTEM.md`) | ✅ done | `test_context_files.py` |
+| **Prompt templates** (`{{variables}}`) | ✅ done | `test_prompts.py` |
+| **Editor richness** (@file, tab, image paste, !shell) | ✅ done | `test_editor.py` (40 tests) |
 
-**Total: 274 tests, all passing.**
+**Total: 450 tests, all passing.**

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 import sys
 import threading
 from pathlib import Path
@@ -71,8 +72,10 @@ _AGENT_OPTIONS = [
     click.option("--persistent-shell", is_flag=True, default=False, help="Use a persistent bash session across turns."),
     click.option("--workspace", "-w", default=".", show_default=True, help="Workspace root path."),
     click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging and show model thinking tokens."),
-    click.option("--mode", "output_mode", type=click.Choice(["interactive", "print", "json"]), default=None, help="Output mode: interactive (REPL), print (text only), json (JSONL events)."),
+    click.option("--mode", "output_mode", type=click.Choice(["interactive", "print", "json", "rpc"]), default=None, help="Output mode: interactive (REPL), print (text only), json (JSONL events), rpc (JSONL over stdio)."),
     click.option("--print", "-P", "print_mode", is_flag=True, default=False, help="Shorthand for --mode print."),
+    click.option("--template", "-T", "template_name", default=None, help="Use a prompt template by name (from .tau/prompts/ or ~/.tau/prompts/)."),
+    click.option("--var", multiple=True, help="Set template variable: --var key=value (repeatable)."),
 ]
 
 def _agent_options(fn):
@@ -391,6 +394,8 @@ _SLASH_HELP = (
     "  /think <level> hot-swap the reasoning effort (off, low, medium, high)\n"
     "  /tokens        show current token usage\n"
     "  /tree          browse & branch the session history in-place\n"
+    "  /prompt <name> [k=v …]  expand a prompt template and send it\n"
+    "  /prompts       list available prompt templates\n"
     "  /help          show this message\n"
     "  exit / Ctrl-D  quit"
 )
@@ -875,6 +880,55 @@ def _handle_slash(
         _tree_navigator(agent, output_fn)
         return True
 
+    if keyword == "/prompts":
+        from tau.prompts import list_templates
+        ws = agent._config.workspace_root if agent else "."
+        templates = list_templates(ws)
+        if not templates:
+            _print("[dim]  No prompt templates found.  Add .md files to .tau/prompts/ or ~/.tau/prompts/.[/dim]")
+        else:
+            from tau.prompts import extract_variables
+            lines = []
+            for name, path in sorted(templates.items()):
+                try:
+                    text = path.read_text(encoding="utf-8")
+                    vars_ = extract_variables(text)
+                    var_str = ", ".join(f"{{{{{v}}}}}" for v in vars_) if vars_ else "(no variables)"
+                    loc = "project" if ".tau" in str(path) else "global"
+                    lines.append(f"  [cyan]{name:<20}[/cyan] [dim]{var_str:<40} {loc}[/dim]")
+                except Exception:  # noqa: BLE001
+                    lines.append(f"  [cyan]{name:<20}[/cyan] [red]error reading[/red]")
+            _print("[bold]Prompt templates:[/bold]\n" + "\n".join(lines))
+        return True
+
+    if keyword == "/prompt":
+        if not arg:
+            _print("[dim]  Usage: /prompt <template-name> [key=value …][/dim]")
+            return True
+        if agent is None:
+            _print("[dim]  /prompt requires an active session.[/dim]")
+            return True
+        # Parse: /prompt <name> [key=value key=value ...]
+        prompt_parts = arg.split()
+        tmpl_name = prompt_parts[0]
+        var_pairs = prompt_parts[1:]
+        from tau.prompts import resolve_template, parse_var_args
+        try:
+            variables = parse_var_args(var_pairs)
+        except ValueError as e:
+            _print(f"[red]  ✗ {e}[/red]")
+            return True
+        ws = agent._config.workspace_root
+        result = resolve_template(tmpl_name, ws, variables)
+        if result is None:
+            _print(f"[red]  ✗ Template {tmpl_name!r} not found.[/red]")
+            return True
+        # Return False with a special attribute so the caller sends it as a prompt
+        # Actually, we need to dispatch this differently — return the expanded text
+        # We'll inject it via the output_fn flow
+        _print(f"[dim]  ↳ expanded template [bold]{tmpl_name}[/bold][/dim]")
+        return result  # Return the expanded prompt string (truthy, but not True)
+
     if ext_registry is not None and ext_context is not None:
         if ext_registry.handle_slash(cmd, ext_context):
             return True
@@ -906,13 +960,49 @@ def _repl(
     import threading
     from prompt_toolkit import Application
     from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.document import Document
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.formatted_text import ANSI
-    from prompt_toolkit.layout import Layout, HSplit, Window, ScrollablePane
+    from prompt_toolkit.layout import Layout, HSplit, Window, ScrollablePane, Float, FloatContainer
     from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+    from prompt_toolkit.layout.menus import CompletionsMenu
     from prompt_toolkit.layout.processors import BeforeInput
     from prompt_toolkit.data_structures import Point
+
+    from tau.editor import (
+        expand_at_files,
+        complete_path,
+        complete_slash_commands,
+        is_shell_command,
+        run_inline_shell,
+        is_image_path,
+        detect_pasted_image_macos,
+        BUILTIN_SLASH_COMMANDS,
+    )
+
+    # -- completer -----------------------------------------------------------
+    class _TauCompleter(Completer):
+        """Tab completion for /commands and @file references."""
+
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            # /slash command completion (at start of line)
+            if text.startswith("/"):
+                word = text.split()[0] if text.split() else text
+                ext_cmds = [name for name, _ in ext_registry.all_slash_commands()] if ext_registry else []
+                for cmd in complete_slash_commands(word, BUILTIN_SLASH_COMMANDS, ext_cmds):
+                    yield Completion(cmd, start_position=-len(word))
+                return
+            # @file completion
+            # Find the last @token being typed
+            m = re.search(r"@([^\s]*)$", text)
+            if m:
+                prefix = m.group(1)
+                ws = agent._config.workspace_root
+                for path in complete_path(prefix, ws):
+                    yield Completion(path, start_position=-len(prefix))
+                return
 
     # -- state ---------------------------------------------------------------
     agent_running = threading.Event()
@@ -941,7 +1031,8 @@ def _repl(
     output_text_parts.append(header)
 
     # -- buffers -------------------------------------------------------------
-    input_buffer = Buffer(name="input")
+    _completer = _TauCompleter()
+    input_buffer = Buffer(name="input", completer=_completer, complete_while_typing=False)
 
     # -- helpers -------------------------------------------------------------
     def _get_output_text() -> ANSI:
@@ -1026,13 +1117,25 @@ def _repl(
                 app_ref[0].exit()
             return
 
+        # Inline shell: !command — execute directly, bypass agent
+        if is_shell_command(text):
+            cmd = text[1:]
+            _append_output(f"\n{_DIM}$ {cmd}{_RESET}\n")
+            ws = agent._config.workspace_root
+            output = run_inline_shell(cmd, ws)
+            _append_output(output if output.endswith("\n") else output + "\n")
+            return
+
         # slash commands
         if text.startswith("/") and steering is not None:
             handled = _handle_slash(
                 text, steering, ext_registry, ext_context, agent=agent, output_fn=_append_output, staged_images=_staged_images
             )
-            if handled:
+            if handled is True:
                 return
+            # /prompt returns the expanded template text as a string
+            if isinstance(handled, str):
+                text = handled
 
         # steering (agent already running)
         if agent_running.is_set() and steering is not None:
@@ -1040,8 +1143,18 @@ def _repl(
             _append_output(f'\n  ⇢ steered "{text[:60]}" (stream will restart)\n')
             return
 
-        # new agent turn
-        _append_output(f"\n{_BOLD}{_CYAN}you{_RESET} {text}\n" + f"{_DIM}{'─' * 60}{_RESET}\n")
+        # new agent turn — expand @file references first
+        ws = agent._config.workspace_root
+        expanded, inlined_files = expand_at_files(text, ws)
+        if inlined_files:
+            n = len(inlined_files)
+            names = ", ".join(Path(f).name for f in inlined_files)
+            _append_output(f"\n{_BOLD}{_CYAN}you{_RESET} {text}\n")
+            _append_output(f"{_DIM}  📎 {n} file{'s' if n > 1 else ''} inlined: {names}{_RESET}\n")
+            _append_output(f"{_DIM}{'─' * 60}{_RESET}\n")
+            text = expanded
+        else:
+            _append_output(f"\n{_BOLD}{_CYAN}you{_RESET} {text}\n" + f"{_DIM}{'─' * 60}{_RESET}\n")
         threading.Thread(
             target=_run_agent, args=(text,), daemon=True
         ).start()
@@ -1052,6 +1165,30 @@ def _repl(
     @kb.add("enter")
     def _enter(event: object) -> None:
         _on_enter(event)
+
+    @kb.add("tab")
+    def _tab(event: object) -> None:
+        """Trigger tab completion or cycle through completions."""
+        buff = event.app.current_buffer
+        if buff.complete_state:
+            # Already showing completions — cycle to next
+            buff.complete_next()
+        else:
+            buff.start_completion(select_first=False)
+
+    @kb.add("c-v")
+    def _paste_image(event: object) -> None:
+        """Ctrl-V: detect clipboard image (macOS) and stage it."""
+        img_path = detect_pasted_image_macos()
+        if img_path:
+            _staged_images.append(img_path)
+            _append_output(f"  {_DIM}📷 image pasted from clipboard → {Path(img_path).name}{_RESET}\n")
+        else:
+            # Fall back to normal paste
+            event.app.clipboard.rotate()
+            data = event.app.clipboard.get_data()
+            if data.text:
+                input_buffer.insert_text(data.text)
 
     @kb.add("c-d")
     def _ctrl_d(event: object) -> None:
@@ -1077,20 +1214,31 @@ def _repl(
         height=1,
     )
 
-    layout = Layout(
-        HSplit([
-            Window(
-                content=FormattedTextControl(
-                    _get_output_text,
-                    focusable=False,
-                    get_cursor_position=_get_cursor_position
-                ),
-                wrap_lines=True,
-                always_hide_cursor=True,
+    body = HSplit([
+        Window(
+            content=FormattedTextControl(
+                _get_output_text,
+                focusable=False,
+                get_cursor_position=_get_cursor_position
             ),
-            Window(height=1, char="─", style="class:separator"),
-            input_window,
-        ]),
+            wrap_lines=True,
+            always_hide_cursor=True,
+        ),
+        Window(height=1, char="─", style="class:separator"),
+        input_window,
+    ])
+
+    layout = Layout(
+        FloatContainer(
+            content=body,
+            floats=[
+                Float(
+                    xcursor=True,
+                    ycursor=True,
+                    content=CompletionsMenu(max_height=12, scroll_offset=1),
+                ),
+            ],
+        ),
         focused_element=input_window,
     )
 
@@ -1140,12 +1288,33 @@ def run_cmd(
     verbose: bool,
     output_mode: str | None,
     print_mode: bool,
+    template_name: str | None,
+    var: tuple[str, ...],
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
     # Resolve output mode: --print flag takes precedence as shorthand
     mode = output_mode
     if print_mode:
         mode = "print"
+
+    # Resolve prompt template
+    if template_name:
+        from tau.prompts import resolve_template, parse_var_args
+        try:
+            variables = parse_var_args(var)
+        except ValueError as exc:
+            click.echo(f"Error: {exc}", err=True)
+            sys.exit(1)
+        ws = str(Path(workspace).resolve())
+        rendered = resolve_template(template_name, ws, variables)
+        if rendered is None:
+            click.echo(f"Error: template {template_name!r} not found.", err=True)
+            sys.exit(1)
+        # Template becomes the prompt; any PROMPT arg is appended as extra context
+        if prompt:
+            prompt = rendered.rstrip() + "\n\n" + prompt
+        else:
+            prompt = rendered
 
     # Support piped stdin: if no prompt and stdin is not a TTY, read from stdin
     if not prompt and not sys.stdin.isatty():
@@ -1166,7 +1335,7 @@ def run_cmd(
 
     # Non-interactive modes disable shell confirmation
     confirm_hook = None
-    if mode in ("print", "json"):
+    if mode in ("print", "json", "rpc"):
         tau_config.shell.require_confirmation = False
 
     agent, ext_registry = _build_agent(
@@ -1177,6 +1346,24 @@ def run_cmd(
         resume_id=resume_id,
         steering=steering,
     )
+
+    # Expand @file references in the prompt (single-shot mode)
+    if prompt:
+        from tau.editor import expand_at_files
+        prompt, _inlined = expand_at_files(prompt, agent_config.workspace_root)
+
+    if mode == "rpc":
+        from tau.rpc import run_rpc
+        from tau.sdk import TauSession
+        tau_session = TauSession(
+            agent=agent,
+            session=agent._session,
+            session_manager=session_manager,
+            ext_registry=ext_registry,
+            steering=steering,
+        )
+        run_rpc(tau_session)
+        return
 
     if mode == "json":
         if not prompt:
@@ -1261,6 +1448,7 @@ def sessions_fork(
     provider: str | None, model: str | None, think: str | None, image: tuple[str, ...], resume_id: str | None,
     session_name: str | None, no_confirm: bool, no_parallel: bool, persistent_shell: bool, workspace: str, verbose: bool,
     output_mode: str | None, print_mode: bool,
+    template_name: str | None, var: tuple[str, ...],
 ) -> None:
     sm = SessionManager()
     try:
@@ -1320,6 +1508,59 @@ def sessions_fork_points(session_id: str) -> None:
             (f"  [{fp.index:3}]  ", Style(color="cyan", bold=True)),
             (fp.content, Style(dim=True)),
         ))
+
+# ---------------------------------------------------------------------------
+# `tau prompts` subcommands
+# ---------------------------------------------------------------------------
+@main.group("prompts")
+def prompts_group() -> None:
+    """Manage prompt templates."""
+
+@prompts_group.command("list")
+@click.option("--workspace", "-w", default=".", show_default=True)
+def prompts_list(workspace: str) -> None:
+    """List available prompt templates."""
+    from tau.prompts import list_templates, extract_variables
+    ws = str(Path(workspace).resolve())
+    templates = list_templates(ws)
+    if not templates:
+        console.print("[dim]No prompt templates found.  Add .md files to .tau/prompts/ or ~/.tau/prompts/.[/dim]")
+        return
+    console.print(f"[bold]{'NAME':<20} {'VARIABLES':<40} {'SOURCE'}[/bold]")
+    console.print(Rule(style="dim"))
+    for name, path in sorted(templates.items()):
+        try:
+            text = path.read_text(encoding="utf-8")
+            vars_ = extract_variables(text)
+            var_str = ", ".join(vars_) if vars_ else "\u2014"
+            loc = "project" if ".tau" in str(path) else "global"
+            console.print(Text.assemble(
+                (f"  {name:<20}", Style(color="cyan", bold=True)),
+                (f"{var_str:<40}", Style(dim=True)),
+                (loc, Style(dim=True)),
+            ))
+        except Exception:  # noqa: BLE001
+            console.print(f"  [cyan]{name:<20}[/cyan] [red]error reading[/red]")
+
+@prompts_group.command("show")
+@click.argument("name")
+@click.option("--workspace", "-w", default=".", show_default=True)
+def prompts_show(name: str, workspace: str) -> None:
+    """Show the contents of a prompt template."""
+    from tau.prompts import load_template, extract_variables
+    ws = str(Path(workspace).resolve())
+    content = load_template(name, ws)
+    if content is None:
+        err_console.print(f"[red]Template {name!r} not found.[/red]")
+        sys.exit(1)
+    vars_ = extract_variables(content)
+    var_str = ", ".join(f"{{{{{v}}}}}" for v in vars_) if vars_ else "none"
+    console.print(Panel(
+        content.rstrip(),
+        title=f"Template: {name}",
+        subtitle=f"variables: {var_str}",
+        border_style="cyan",
+    ))
 
 # ---------------------------------------------------------------------------
 # `tau extensions` subcommands
