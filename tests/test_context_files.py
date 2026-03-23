@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tau.context_files import _find_context_files, load_context_files
+from tau.context_files import _find_context_files, load_context_files, load_system_prompt_override
 
 
 # ---------------------------------------------------------------------------
@@ -181,3 +181,108 @@ class TestContextManagerIntegration:
         sys_msgs = [m for m in ctx.get_messages() if m.role == "system"]
         combined = " ".join(m.content for m in sys_msgs)
         assert "Always write tests first." in combined
+
+
+# ===========================================================================
+# load_system_prompt_override — .tau/SYSTEM.md
+# ===========================================================================
+
+class TestLoadSystemPromptOverride:
+    def test_returns_none_when_no_file(self, tmp_path):
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        assert load_system_prompt_override(str(workspace)) is None
+
+    def test_returns_none_when_dir_missing(self, tmp_path):
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        # .tau/ doesn't even exist
+        assert load_system_prompt_override(str(workspace)) is None
+
+    def test_returns_content_when_present(self, tmp_path):
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        _write(workspace / ".tau" / "SYSTEM.md", "You are a pirate.")
+        result = load_system_prompt_override(str(workspace))
+        assert result == "You are a pirate."
+
+    def test_strips_whitespace(self, tmp_path):
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        _write(workspace / ".tau" / "SYSTEM.md", "  \n  Custom prompt  \n  ")
+        result = load_system_prompt_override(str(workspace))
+        assert result == "Custom prompt"
+
+    def test_returns_none_when_file_is_empty(self, tmp_path):
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        _write(workspace / ".tau" / "SYSTEM.md", "   ")
+        assert load_system_prompt_override(str(workspace)) is None
+
+    def test_multiline_content(self, tmp_path):
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        content = "You are a coding assistant.\n\nRules:\n- Be concise\n- Write tests"
+        _write(workspace / ".tau" / "SYSTEM.md", content)
+        result = load_system_prompt_override(str(workspace))
+        assert result == content
+
+
+class TestSystemPromptOverrideIntegration:
+    def test_overrides_default_system_prompt(self, tmp_path):
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        _write(workspace / ".tau" / "SYSTEM.md", "You are a pirate assistant.")
+
+        from tau.core.context import ContextManager
+        from tau.core.types import AgentConfig
+
+        config = AgentConfig(
+            workspace_root=str(workspace),
+            compaction_enabled=False,
+        )
+        ctx = ContextManager(config)
+
+        # Simulate what _build_agent does
+        override = load_system_prompt_override(str(workspace))
+        assert override is not None
+        for m in ctx._messages:
+            if m.role == "system":
+                m.content = override
+                break
+
+        sys_msgs = [m for m in ctx.get_messages() if m.role == "system"]
+        combined = " ".join(m.content for m in sys_msgs)
+        assert "pirate assistant" in combined
+        # Default prompt should NOT be present
+        assert "minimal CLI coding agent" not in combined
+
+    def test_context_files_still_appended_after_override(self, tmp_path):
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        _write(workspace / ".tau" / "SYSTEM.md", "You are a pirate assistant.")
+        _write(workspace / "AGENTS.md", "Never use rm -rf.")
+
+        from tau.core.context import ContextManager
+        from tau.core.types import AgentConfig
+
+        config = AgentConfig(
+            workspace_root=str(workspace),
+            compaction_enabled=False,
+        )
+        ctx = ContextManager(config)
+
+        override = load_system_prompt_override(str(workspace))
+        for m in ctx._messages:
+            if m.role == "system":
+                m.content = override
+                break
+
+        context_text = load_context_files(str(workspace))
+        if context_text:
+            ctx.inject_prompt_fragment(context_text)
+
+        sys_msgs = [m for m in ctx.get_messages() if m.role == "system"]
+        combined = " ".join(m.content for m in sys_msgs)
+        assert "pirate assistant" in combined
+        assert "Never use rm -rf." in combined

@@ -84,3 +84,30 @@ def load_context_files(workspace_root: str) -> str:
             logger.warning("Could not read context file %s: %s", path, exc)
 
     return "\n\n---\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Per-project system prompt override: .tau/SYSTEM.md
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT_FILE = ".tau/SYSTEM.md"
+
+
+def load_system_prompt_override(workspace_root: str) -> str | None:
+    """Return the contents of `<workspace>/.tau/SYSTEM.md` if it exists.
+
+    When present this file **replaces** the default system prompt entirely,
+    giving projects full control over the agent's persona and instructions.
+    Returns ``None`` when no override file is found.
+    """
+    path = Path(workspace_root).resolve() / _SYSTEM_PROMPT_FILE
+    if not path.is_file():
+        return None
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+        if content:
+            logger.debug("Loaded system prompt override: %s", path)
+            return content
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read system prompt file %s: %s", path, exc)
+    return None

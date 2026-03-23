@@ -107,6 +107,16 @@ def _build_agent(
         ollama_model=agent_config.model,
     )
     context = ContextManager(agent_config)
+    # Per-project system prompt override: .tau/SYSTEM.md
+    from tau.context_files import load_system_prompt_override
+    system_override = load_system_prompt_override(agent_config.workspace_root)
+    if system_override is not None:
+        agent_config.system_prompt = system_override
+        # Replace the system message already created by ContextManager
+        for m in context._messages:
+            if m.role == "system":
+                m.content = system_override
+                break
     # Load AGENTS.md / CLAUDE.md context files
     from tau.context_files import load_context_files
     context_text = load_context_files(agent_config.workspace_root)
