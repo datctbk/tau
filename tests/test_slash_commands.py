@@ -388,3 +388,85 @@ class TestSlashUnknown:
                 agent=None,
             )
         assert handled is False
+
+
+# ===========================================================================
+# /copy
+# ===========================================================================
+
+class TestSlashCopy:
+    def test_returns_true(self):
+        agent = _make_agent()
+        handled, _ = _call("/copy", agent)
+        assert handled is True
+
+    def test_no_agent(self):
+        handled, prints = _call("/copy", None)
+        assert handled is True
+        output = str(prints[0]) if prints else ""
+        assert "requires" in output
+
+    def test_no_assistant_message(self):
+        agent = _make_agent()
+        handled, prints = _call("/copy", agent)
+        assert handled is True
+        output = str(prints[0]) if prints else ""
+        assert "No assistant" in output
+
+    def test_copies_last_assistant(self):
+        agent = _make_agent()
+        agent._context.add_message(Message(role="user", content="hi"))
+        agent._context.add_message(Message(role="assistant", content="hello there"))
+        agent._context.add_message(Message(role="user", content="bye"))
+        agent._context.add_message(Message(role="assistant", content="goodbye"))
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            handled, prints = _call("/copy", agent)
+
+        assert handled is True
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        assert call_args.kwargs.get("input") == "goodbye"
+
+    def test_copies_skips_empty_assistant(self):
+        agent = _make_agent()
+        agent._context.add_message(Message(role="user", content="hi"))
+        agent._context.add_message(Message(role="assistant", content="real answer"))
+        agent._context.add_message(Message(role="assistant", content=""))
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            handled, prints = _call("/copy", agent)
+
+        assert handled is True
+        call_args = mock_run.call_args
+        assert call_args.kwargs.get("input") == "real answer"
+
+    def test_clipboard_tool_not_found(self):
+        agent = _make_agent()
+        agent._context.add_message(Message(role="assistant", content="text"))
+
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            handled, prints = _call("/copy", agent)
+
+        assert handled is True
+        output = str(prints[0]) if prints else ""
+        assert "not found" in output.lower()
+
+    def test_copy_error(self):
+        agent = _make_agent()
+        agent._context.add_message(Message(role="assistant", content="text"))
+
+        with patch("subprocess.run", side_effect=RuntimeError("boom")):
+            handled, prints = _call("/copy", agent)
+
+        assert handled is True
+        output = str(prints[0]) if prints else ""
+        assert "failed" in output.lower()
+
+    def test_copy_in_help_text(self):
+        handled, prints = _call("/help", None)
+        # /help renders a Rich Panel; check the renderable content
+        panel = prints[0]
+        assert "/copy" in str(panel.renderable)

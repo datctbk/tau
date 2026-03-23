@@ -394,6 +394,7 @@ _SLASH_HELP = (
     "  /think <level> hot-swap the reasoning effort (off, low, medium, high)\n"
     "  /tokens        show current token usage\n"
     "  /tree          browse & branch the session history in-place\n"
+    "  /copy          copy last assistant message to clipboard\n"
     "  /prompt <name> [k=v …]  expand a prompt template and send it\n"
     "  /prompts       list available prompt templates\n"
     "  /help          show this message\n"
@@ -826,6 +827,46 @@ def _handle_slash(
                 ("  →  ", Style(dim=True)),
                 (arg, Style(color="cyan", bold=True)),
             ))
+        return True
+
+    if keyword == "/copy":
+        if agent is None:
+            _print("[dim]  /copy requires an active session.[/dim]")
+            return True
+        # Find the last assistant message
+        last_text = None
+        for msg in reversed(agent._context.get_messages()):
+            if msg.role == "assistant" and msg.content:
+                last_text = msg.content
+                break
+        if not last_text:
+            _print("[dim]  No assistant message to copy.[/dim]")
+            return True
+        import subprocess, platform
+        try:
+            _sys = platform.system()
+            if _sys == "Darwin":
+                proc = subprocess.run(["pbcopy"], input=last_text, text=True, check=True, timeout=5)
+            elif _sys == "Linux":
+                proc = subprocess.run(
+                    ["xclip", "-selection", "clipboard"],
+                    input=last_text, text=True, check=True, timeout=5,
+                )
+            elif _sys == "Windows":
+                proc = subprocess.run(["clip"], input=last_text, text=True, check=True, timeout=5)
+            else:
+                _print(f"[yellow]  \u26a0 Clipboard not supported on {_sys}[/yellow]")
+                return True
+            preview = last_text[:80].replace("\n", " ")
+            _print(Text.assemble(
+                ("  \u2713 ", Style(color="green", bold=True)),
+                ("copied to clipboard", Style(color="green")),
+                (f"  ({len(last_text)} chars)", Style(dim=True)),
+            ))
+        except FileNotFoundError:
+            _print("[yellow]  \u26a0 Clipboard tool not found. Install pbcopy (macOS), xclip (Linux), or clip (Windows).[/yellow]")
+        except Exception as exc:
+            _print(f"[red]  \u2717 copy failed: {exc}[/red]")
         return True
 
     if keyword == "/image":
