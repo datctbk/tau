@@ -136,6 +136,7 @@ class TauConfig(BaseSettings):
     )
     parallel_tools: bool = True
     parallel_tools_max_workers: int = 8
+    max_cost: float = 0.0  # USD budget ceiling; 0 = unlimited
 
     # provider sub-configs
     openai: OpenAIProviderConfig = OpenAIProviderConfig()

@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Generator, Iterator, TYPE_CHECKING
+from typing import Callable, Generator, Iterator, TYPE_CHECKING
 
 from tau.core.types import (
     AgentConfig,
     CompactionEvent,
+    CostLimitExceeded,
     ErrorEvent,
     Event,
     Message,
@@ -90,6 +91,7 @@ class Agent:
         session_manager: "SessionManager",
         steering: "SteeringChannel | None" = None,
         ext_registry: "ExtensionRegistry | None" = None,
+        cost_calculator: "Callable[[str, object], float] | None" = None,
     ) -> None:
         self._config = config
         self._provider = provider
@@ -99,6 +101,7 @@ class Agent:
         self._session = session
         self._session_manager = session_manager
         self._steering = steering
+        self._cost_calculator = cost_calculator
 
     # ------------------------------------------------------------------
     # Tool dispatch (parallel or sequential)
@@ -200,6 +203,22 @@ class Agent:
                 cu["output_tokens"] += response.usage.output_tokens
                 cu["cache_read_tokens"] += response.usage.cache_read_tokens
                 cu["cache_write_tokens"] += response.usage.cache_write_tokens
+
+            # Budget guard: check if session cost exceeds --max-cost
+            if self._config.max_cost > 0 and cu is not None and self._cost_calculator:
+                class _U:
+                    pass
+                _u = _U()
+                _u.input_tokens = cu["input_tokens"]        # type: ignore[attr-defined]
+                _u.output_tokens = cu["output_tokens"]      # type: ignore[attr-defined]
+                _u.cache_read_tokens = cu["cache_read_tokens"]  # type: ignore[attr-defined]
+                _u.cache_write_tokens = cu["cache_write_tokens"]  # type: ignore[attr-defined]
+                session_cost = self._cost_calculator(self._config.model, _u)
+                if session_cost >= self._config.max_cost:
+                    yield TurnComplete(usage=response.usage)
+                    yield CostLimitExceeded(session_cost=session_cost, max_cost=self._config.max_cost)
+                    self._persist()
+                    return
 
             # Blocking mode (no streaming) — emit full text now
             if response.content and not had_deltas:

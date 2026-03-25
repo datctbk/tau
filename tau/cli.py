@@ -25,6 +25,7 @@ from tau.core.tool_registry import ToolRegistry
 from tau.core.types import (
     AgentConfig,
     CompactionEvent,
+    CostLimitExceeded,
     ErrorEvent,
     ExtensionLoadError,
     RetryEvent,
@@ -117,6 +118,8 @@ _AGENT_OPTIONS = [
     click.option("--print", "-P", "print_mode", is_flag=True, default=False, help="Shorthand for --mode print."),
     click.option("--template", "-T", "template_name", default=None, help="Use a prompt template by name (from .tau/prompts/ or ~/.tau/prompts/)."),
     click.option("--var", multiple=True, help="Set template variable: --var key=value (repeatable)."),
+    click.option("--max-cost", "max_cost", type=float, default=None, help="USD budget ceiling; stop session when exceeded."),
+    click.option("--no-session", is_flag=True, default=False, help="Ephemeral mode: don't persist the session to disk."),
 ]
 
 def _agent_options(fn):
@@ -211,6 +214,7 @@ def _build_agent(
         session=session,
         session_manager=session_manager,
         steering=steering,
+        cost_calculator=tau_config.calculate_cost,
     )
     return agent, ext_registry
 
@@ -223,6 +227,7 @@ def _make_agent_config(
     workspace: str,
     no_parallel: bool = False,
     persistent_shell: bool = False,
+    max_cost: float | None = None,
 ) -> AgentConfig:
     if provider:
         tau_config.provider = provider
@@ -242,6 +247,7 @@ def _make_agent_config(
         workspace_root=str(Path(workspace).resolve()),
         parallel_tools=tau_config.parallel_tools and not no_parallel,
         parallel_tools_max_workers=tau_config.parallel_tools_max_workers,
+        max_cost=max_cost if max_cost is not None else tau_config.max_cost,
     )
 
 # ---------------------------------------------------------------------------
@@ -378,6 +384,12 @@ def _render_events(
         elif isinstance(event, ErrorEvent):
             _flush_stream(end_line=False)
             _writeln(f"Error: {event.message}")
+        elif isinstance(event, CostLimitExceeded):
+            _flush_stream(end_line=True)
+            if output_fn:
+                _writeln(f"  ⚠ budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f} — stopping session")
+            else:
+                console.print(f"[bold red]  ⚠ budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f} — stopping session[/bold red]")
     _flush_stream(end_line=True)
 
 # ---------------------------------------------------------------------------
@@ -402,6 +414,9 @@ def _render_events_print(
             text_parts.append(event.text)
         elif isinstance(event, ErrorEvent):
             print(event.message, file=sys.stderr)
+            exit_code = 1
+        elif isinstance(event, CostLimitExceeded):
+            print(f"Budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f}", file=sys.stderr)
             exit_code = 1
     output = "".join(text_parts)
     if output:
@@ -1492,6 +1507,8 @@ def run_cmd(
     print_mode: bool,
     template_name: str | None,
     var: tuple[str, ...],
+    max_cost: float | None,
+    no_session: bool,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
     # Resolve output mode: --print flag takes precedence as shorthand
@@ -1532,8 +1549,12 @@ def run_cmd(
     ensure_tau_home()
     tau_config = load_config()
     theme.load(tau_config)
-    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, persistent_shell)
-    session_manager = SessionManager()
+    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, persistent_shell, max_cost)
+    if no_session:
+        from tau.sdk import InMemorySessionManager
+        session_manager = InMemorySessionManager()
+    else:
+        session_manager = SessionManager()
     steering = SteeringChannel()
 
     # Non-interactive modes disable shell confirmation
@@ -1652,6 +1673,7 @@ def sessions_fork(
     session_name: str | None, no_confirm: bool, no_parallel: bool, persistent_shell: bool, workspace: str, verbose: bool,
     output_mode: str | None, print_mode: bool,
     template_name: str | None, var: tuple[str, ...],
+    max_cost: float | None, no_session: bool,
 ) -> None:
     sm = SessionManager()
     try:
@@ -1671,7 +1693,7 @@ def sessions_fork(
         _setup_logging(verbose)
         ensure_tau_home()
         tau_config = load_config()
-        agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel)
+        agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, max_cost=max_cost)
         steering = SteeringChannel()
         agent, ext_reg = _build_agent(
             tau_config=tau_config, agent_config=agent_config,

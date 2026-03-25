@@ -200,6 +200,8 @@ class AgentConfig:
     # --- parallel tool execution ---
     parallel_tools: bool = True          # run independent tool calls concurrently
     parallel_tools_max_workers: int = 8  # thread-pool cap
+    # --- budget ---
+    max_cost: float = 0.0  # USD ceiling; 0 = unlimited
 
 # ---------------------------------------------------------------------------
 # Compaction
@@ -314,6 +316,16 @@ class CompactionEvent:
         }
 
 @dataclass
+class CostLimitExceeded:
+    """Emitted when session cost exceeds the --max-cost budget."""
+    session_cost: float
+    max_cost: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "cost_limit_exceeded", "session_cost": self.session_cost, "max_cost": self.max_cost}
+
+
+@dataclass
 class SteerEvent:
     """Emitted when the user steers mid-stream (current response discarded)."""
     new_input: str          # the injected user message
@@ -366,5 +378,6 @@ Event = Union[
     CompactionEvent,
     RetryEvent,
     SteerEvent,
+    CostLimitExceeded,
     ExtensionLoadError,
 ]

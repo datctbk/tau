@@ -49,6 +49,12 @@ tau run -P "summarise foo.py"               # shorthand for --mode print
 # Prompt templates (see section 12 for details)
 tau run -T code-review --var file=foo.py
 tau run -T explain --var topic=recursion --var lang=python
+
+# Budget guard — stop when cost exceeds $1.50 (see section 22)
+tau run --max-cost 1.50 "refactor the auth module"
+
+# Ephemeral mode — don't persist session to disk (see section 23)
+tau run --no-session "what is 2+2?"
 ```
 
 ---
@@ -688,7 +694,7 @@ The following features exist in full-featured coding agents (pi, Cursor, Claude 
 | **P4** | `tau doctor` | Check API keys, provider reachability, config validity |
 | ~~**P4**~~ | ~~Non-interactive pipe mode~~ | ✅ Implemented — see section 10. `echo "prompt" \| tau run` with auto print mode |
 | ~~**P4**~~ | ~~Structured JSON output~~ | ✅ Implemented — see section 10. `tau run --mode json "..."` |
-| **P4** | `--max-cost` budget guard | Hard-stop if a session exceeds a cost ceiling |
+| ~~**P4**~~ | ~~`--max-cost` budget guard~~ | ✅ Implemented — `tau run --max-cost 1.50` stops session when cost ceiling exceeded |
 | ~~**P4**~~ | ~~Extension hot-reload~~ | ✅ Implemented — `/reload` hot-reloads config, extensions, skills, context files |
 | **P5** | TUI / split-pane view | Side-by-side file diff + chat panel (like Cursor's composer) |
 | **P5** | Multi-agent orchestration | Spawn sub-agents for parallelisable sub-tasks |
@@ -742,3 +748,42 @@ Use `enabled_only` for strict sandboxing (e.g. read-only mode).
 Use `disabled` to selectively remove dangerous tools while keeping everything else.
 
 Skills and extensions register their own tools and are not affected by this setting.
+
+---
+
+## 22. Budget guard (`--max-cost`)
+
+Hard-stop a session when accumulated token cost exceeds a USD ceiling:
+
+```bash
+# Stop session once cost reaches $1.50
+tau run --max-cost 1.50 "refactor the auth module"
+
+# Works with all output modes
+tau run --max-cost 0.50 --mode print "summarise this codebase"
+tau run --max-cost 2.00 --mode json  "generate tests"
+```
+
+Set a default ceiling in `~/.tau/config.toml`:
+
+```toml
+max_cost = 1.00   # USD; 0 = unlimited (default)
+```
+
+The CLI flag `--max-cost` overrides the config value. When the budget is exceeded the agent emits a `CostLimitExceeded` event, persists the session, and exits cleanly.
+
+---
+
+## 23. Ephemeral mode (`--no-session`)
+
+Run without persisting the session to disk:
+
+```bash
+# Quick one-off — nothing saved to ~/.tau/sessions/
+tau run --no-session "what is 2+2?"
+
+# Combine with print mode for scripting
+tau run --no-session -P "explain this error: $ERR"
+```
+
+Uses an in-memory session manager so no files are written. Useful for scripting, CI, or quick questions where session history is unnecessary.

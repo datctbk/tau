@@ -147,7 +147,9 @@ ToolParameter      type, description, enum, required
 AgentConfig        provider, model, max_tokens, max_turns, system_prompt,
                    trim_strategy, workspace_root,
                    compaction_enabled, compaction_threshold,
-                   retry_enabled, retry_max_attempts, retry_base_delay
+                   retry_enabled, retry_max_attempts, retry_base_delay,
+                   parallel_tools, parallel_tools_max_workers,
+                   max_cost (USD ceiling; 0 = unlimited)
 ```
 
 **Extension types**
@@ -167,6 +169,7 @@ TurnComplete       end of one turn + TokenUsage
 CompactionEvent    stage=start|end, token counts, summary
 RetryEvent         attempt, max_attempts, delay, error
 SteerEvent         new_input, discarded_tokens
+CostLimitExceeded  session_cost, max_cost (budget exceeded)
 ExtensionLoadError extension_name, error
 ErrorEvent         message
 ```
@@ -665,5 +668,8 @@ No LangChain, no heavy framework. The core is hand-rolled and stays under ~2 klo
 | **Session export** (JSON + Markdown) | ✅ done | `test_session.py`, `test_slash_commands.py` |
 | **Themes** (configurable Rich colors) | ✅ done | `test_theme_and_tools_config.py` |
 | **Configurable tool set** (disabled / enabled_only) | ✅ done | `test_theme_and_tools_config.py`, `test_tool_registry.py` |
+| **/reload** hot-reload (config, extensions, skills) | ✅ done | `test_slash_commands.py`, `test_extensions.py` |
+| **`--max-cost` budget guard** (CostLimitExceeded event) | ✅ done | `test_max_cost.py` |
+| **`--no-session` ephemeral mode** (InMemorySessionManager) | ✅ done | `test_max_cost.py` |
 
-**Total: 527 tests, all passing.**
+**Total: 556 tests, all passing.**
