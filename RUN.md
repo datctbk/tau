@@ -100,6 +100,10 @@ Once inside the REPL (`tau run`):
 /wc hello world              → words=2, lines=1, chars=11
 /json {"a":1,"b":2}          → pretty-printed JSON
 
+# Hot-reload config, extensions, skills, context files
+/reload                      re-read config.toml, re-discover extensions/skills,
+                             refresh AGENTS.md / .tau/SYSTEM.md
+
 exit                         quit (also Ctrl-D)
 ```
 
@@ -179,6 +183,19 @@ tau sessions delete <id> -y   # skip confirmation
 
 # Resume a session (in REPL)
 tau run -s <id>
+
+# Export a session as JSON (default)
+tau sessions export <id>
+tau sessions export <id> -o session.json
+
+# Export as Markdown
+tau sessions export <id> --format markdown
+tau sessions export <id> -f markdown -o session.md
+
+# In REPL: /export prints JSON, /export file.md writes Markdown
+/export
+/export session.json
+/export session.md
 ```
 
 ---
@@ -663,7 +680,7 @@ The following features exist in full-featured coding agents (pi, Cursor, Claude 
 | **P3** | `/tokens` command | Show live token usage breakdown (used / budget / remaining) |
 | **P3** | Thinking-level control | Per-request `thinking_budget` for Claude o1/o3 and Gemini thinking models |
 | **P3** | Model cycling (`/next`) | Round-robin through a configured list of models for comparison |
-| **P3** | `tau sessions export` | Export a session as Markdown or JSON for sharing |
+| ~~**P3**~~ | ~~`tau sessions export`~~ | ✅ Implemented — see section 5. `tau sessions export <id> -f markdown -o session.md` |
 | **P3** | `tau sessions import` | Import an exported session |
 | **P3** | `tau sessions rename` | Rename an existing session |
 | **P4** | Git-aware tools | `git_status`, `git_diff`, `git_log`, `git_commit` tools exposed to the agent |
@@ -672,9 +689,56 @@ The following features exist in full-featured coding agents (pi, Cursor, Claude 
 | ~~**P4**~~ | ~~Non-interactive pipe mode~~ | ✅ Implemented — see section 10. `echo "prompt" \| tau run` with auto print mode |
 | ~~**P4**~~ | ~~Structured JSON output~~ | ✅ Implemented — see section 10. `tau run --mode json "..."` |
 | **P4** | `--max-cost` budget guard | Hard-stop if a session exceeds a cost ceiling |
-| **P4** | Extension hot-reload | Reload extensions without restarting tau (`/reload-extensions`) |
+| ~~**P4**~~ | ~~Extension hot-reload~~ | ✅ Implemented — `/reload` hot-reloads config, extensions, skills, context files |
 | **P5** | TUI / split-pane view | Side-by-side file diff + chat panel (like Cursor's composer) |
 | **P5** | Multi-agent orchestration | Spawn sub-agents for parallelisable sub-tasks |
 | **P5** | RAG / codebase index | Embed the codebase, retrieve relevant chunks as context automatically |
 
 **Priority legend:** P1 = quick win, P5 = large effort / scope creep.
+
+---
+
+## 20. Themes
+
+Customise colours in `~/.tau/config.toml`:
+
+```toml
+[theme]
+user_color      = "cyan"       # user message colour
+assistant_color = "green"      # assistant message colour
+tool_color      = "yellow"     # tool call accent
+system_color    = "dim"        # system messages
+error_color     = "red"        # errors
+accent_color    = "cyan"       # UI accents (borders, links)
+success_color   = "green"      # success indicators
+warning_color   = "yellow"     # warnings
+border_style    = "dim"        # panel border style
+```
+
+All values are [Rich style strings](https://rich.readthedocs.io/en/latest/style.html) —
+plain colour names (`"blue"`), bold/dim modifiers (`"bold cyan"`), or hex (`"#ff8800"`).
+
+The defaults match tau’s original colour scheme. Changes take effect on next `tau run`.
+
+---
+
+## 21. Configurable tool set
+
+Restrict which built-in tools the agent can use:
+
+```toml
+# Disable specific tools
+[tools]
+disabled = ["run_bash"]
+
+# OR: only allow these tools (takes precedence over disabled)
+[tools]
+enabled_only = ["read_file", "list_dir", "search_files"]
+```
+
+Built-in tool names: `read_file`, `write_file`, `edit_file`, `list_dir`, `search_files`, `run_bash`.
+
+Use `enabled_only` for strict sandboxing (e.g. read-only mode).
+Use `disabled` to selectively remove dangerous tools while keeping everything else.
+
+Skills and extensions register their own tools and are not affected by this setting.

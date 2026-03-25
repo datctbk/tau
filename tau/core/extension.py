@@ -327,6 +327,30 @@ class ExtensionRegistry:
     # Runtime API
     # ------------------------------------------------------------------
 
+    def reload(
+        self,
+        registry: "ToolRegistry",
+        context: "ContextManager",
+        steering: "SteeringChannel | None",
+        console_print: Callable[[str], None],
+        disabled: list[str] | None = None,
+    ) -> list[str]:
+        """Unload all extensions, clear cached modules, and re-discover from disk."""
+        for ext in self._extensions.values():
+            try:
+                ext.on_unload()
+            except Exception:  # noqa: BLE001
+                pass
+        # Remove cached extension modules so importlib re-reads the files
+        for key in [k for k in sys.modules if k.startswith("_tau_ext_")]:
+            del sys.modules[key]
+        self._extensions.clear()
+        self._slash_index.clear()
+        self._hooks.clear()
+        if disabled is not None:
+            self._disabled = set(disabled)
+        return self.load_all(registry, context, steering, console_print)
+
     def handle_slash(self, raw_input: str, ext_context: ExtensionContext) -> bool:
         """
         Try to dispatch a /command to a registered extension.

@@ -32,6 +32,10 @@ class ToolRegistry:
         for tool in tools:
             self.register(tool)
 
+    def unregister(self, name: str) -> None:
+        """Remove a tool by name (no-op if not registered)."""
+        self._tools.pop(name, None)
+
     # ------------------------------------------------------------------
     # Lookup
     # ------------------------------------------------------------------

@@ -898,3 +898,93 @@ class TestExtensionLoadError:
         e = ExtensionLoadError(extension_name="bad_ext", error="boom")
         assert e.extension_name == "bad_ext"
         assert e.error == "boom"
+
+
+# ===========================================================================
+# ExtensionRegistry.reload()
+# ===========================================================================
+
+class TestExtensionRegistryReload:
+    def test_reload_clears_and_rediscovers(self, tmp_path):
+        """reload() should clear state and re-load extensions from disk."""
+        code = _minimal_ext("reload_ext")
+        _write_ext(tmp_path, "reload_ext.py", code)
+        reg = _make_registry(tmp_path)
+        r = ToolRegistry()
+        c = ContextManager(_cfg())
+        names = reg.load_all(r, c, steering=None, console_print=lambda _: None)
+        assert "reload_ext" in names
+        assert len(reg.loaded_extensions()) == 1
+
+        # reload should re-discover the same extension
+        names2 = reg.reload(r, c, steering=None, console_print=lambda _: None)
+        assert "reload_ext" in names2
+        assert len(reg.loaded_extensions()) == 1
+
+    def test_reload_picks_up_new_extension(self, tmp_path):
+        """An extension added after initial load should appear after reload()."""
+        code1 = _minimal_ext("ext_a")
+        _write_ext(tmp_path, "ext_a.py", code1)
+        reg = _make_registry(tmp_path)
+        r = ToolRegistry()
+        c = ContextManager(_cfg())
+        names = reg.load_all(r, c, steering=None, console_print=lambda _: None)
+        assert names == ["ext_a"]
+
+        # Add a new extension file
+        code2 = _minimal_ext("ext_b")
+        _write_ext(tmp_path, "ext_b.py", code2)
+
+        names2 = reg.reload(r, c, steering=None, console_print=lambda _: None)
+        assert "ext_a" in names2
+        assert "ext_b" in names2
+
+    def test_reload_respects_new_disabled(self, tmp_path):
+        """Passing disabled to reload() should skip those extensions."""
+        code = _minimal_ext("skip_me")
+        _write_ext(tmp_path, "skip_me.py", code)
+        reg = _make_registry(tmp_path)
+        r = ToolRegistry()
+        c = ContextManager(_cfg())
+        names = reg.load_all(r, c, steering=None, console_print=lambda _: None)
+        assert "skip_me" in names
+
+        names2 = reg.reload(r, c, steering=None, console_print=lambda _: None, disabled=["skip_me"])
+        assert "skip_me" not in names2
+
+    def test_reload_calls_on_unload(self, tmp_path):
+        """reload() should invoke on_unload() on each previously loaded extension."""
+        code = _minimal_ext("unload_test", extra="""
+    def on_unload(self):
+        import builtins
+        builtins._unload_called = True
+""")
+        _write_ext(tmp_path, "unload_test.py", code)
+        reg = _make_registry(tmp_path)
+        r = ToolRegistry()
+        c = ContextManager(_cfg())
+        reg.load_all(r, c, steering=None, console_print=lambda _: None)
+
+        import builtins
+        builtins._unload_called = False  # type: ignore[attr-defined]
+
+        reg.reload(r, c, steering=None, console_print=lambda _: None)
+        assert builtins._unload_called is True  # type: ignore[attr-defined]
+        del builtins._unload_called  # cleanup
+
+    def test_reload_clears_hooks(self, tmp_path):
+        """Hooks should not accumulate across reloads."""
+        code = _minimal_ext("hook_ext", extra="""
+    def event_hook(self, event):
+        pass
+""")
+        _write_ext(tmp_path, "hook_ext.py", code)
+        reg = _make_registry(tmp_path)
+        r = ToolRegistry()
+        c = ContextManager(_cfg())
+        reg.load_all(r, c, steering=None, console_print=lambda _: None)
+        assert len(reg._hooks) == 1
+
+        reg.reload(r, c, steering=None, console_print=lambda _: None)
+        # Should still be exactly 1 hook, not 2
+        assert len(reg._hooks) == 1

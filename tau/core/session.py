@@ -146,6 +146,43 @@ class SessionNotFoundError(Exception):
     pass
 
 
+def export_session_markdown(session: Session) -> str:
+    """Export a session as a readable Markdown document."""
+    lines: list[str] = []
+    name = session.name or "Untitled"
+    lines.append(f"# Session: {name}")
+    lines.append("")
+    lines.append(f"- **ID:** `{session.id}`")
+    lines.append(f"- **Provider:** {session.config.provider}/{session.config.model}")
+    lines.append(f"- **Created:** {session.created_at[:19]}")
+    lines.append(f"- **Updated:** {session.updated_at[:19]}")
+    lines.append(f"- **Messages:** {len(session.messages)}")
+    cu = session.cumulative_usage
+    total_in = cu.get("input_tokens", 0)
+    total_out = cu.get("output_tokens", 0)
+    if total_in or total_out:
+        lines.append(f"- **Tokens:** {total_in:,} in / {total_out:,} out")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    for i, msg in enumerate(session.messages):
+        role = msg.get("role", "unknown")
+        content = msg.get("content") or ""
+        lines.append(f"## [{i}] {role.capitalize()}")
+        lines.append("")
+        if role == "tool":
+            tool_id = msg.get("tool_call_id", "")
+            lines.append(f"*Tool call ID: `{tool_id}`*")
+            lines.append("")
+            lines.append("```")
+            lines.append(content)
+            lines.append("```")
+        else:
+            lines.append(content)
+        lines.append("")
+    return "\n".join(lines)
+
+
 class SessionManager:
     def __init__(self, sessions_dir: Path = SESSIONS_DIR) -> None:
         self._dir = sessions_dir

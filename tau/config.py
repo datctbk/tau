@@ -80,6 +80,27 @@ class ExtensionsConfig(BaseSettings):
     disabled: list[str] = []
 
 
+class ThemeConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAU_THEME_")
+    # Role colours (Rich markup names)
+    user_color: str = "cyan"
+    assistant_color: str = "green"
+    tool_color: str = "yellow"
+    system_color: str = "dim"
+    error_color: str = "red"
+    # UI accents
+    accent_color: str = "cyan"
+    success_color: str = "green"
+    warning_color: str = "yellow"
+    border_style: str = "dim"
+
+
+class ToolsConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAU_TOOLS_")
+    disabled: list[str] = []      # tool names to disable, e.g. ["run_bash"]
+    enabled_only: list[str] = []  # if non-empty, ONLY these tools are registered
+
+
 class PricingConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TAU_PRICING_")
     # Cost per 1M tokens: input, output, cache_read, cache_write
@@ -127,6 +148,8 @@ class TauConfig(BaseSettings):
     extensions: ExtensionsConfig = ExtensionsConfig()
     pricing: PricingConfig = PricingConfig()
     thinking_budgets: ThinkingBudgetsConfig = ThinkingBudgetsConfig()
+    theme: ThemeConfig = ThemeConfig()
+    tools: ToolsConfig = ToolsConfig()
 
     @field_validator("trim_strategy")
     @classmethod
@@ -189,6 +212,14 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
         init["pricing"] = raw["pricing"]
     if "thinking_budgets" in raw:
         init["thinking_budgets"] = raw["thinking_budgets"]
+    if "theme" in raw:
+        init["theme"] = raw["theme"]
+    # [tools] section (note: [tools.shell] already handled above via raw["tools"]["shell"])
+    tools_section = raw.get("tools", {})
+    tool_disabled = tools_section.get("disabled", [])
+    tool_enabled_only = tools_section.get("enabled_only", [])
+    if tool_disabled or tool_enabled_only:
+        init["tools"] = {"disabled": tool_disabled, "enabled_only": tool_enabled_only}
     if "parallel_tools" in raw:
         init["parallel_tools"] = raw["parallel_tools"]
     if "parallel_tools_max_workers" in raw:

@@ -20,8 +20,10 @@ tau                        # interactive REPL
 - **System prompt override**: drop a `.tau/SYSTEM.md` in your project to replace the default prompt
 - **Prompt templates**: reusable Markdown with `{{variable}}` placeholders in `.tau/prompts/`
 - **Editor richness**: `@file` inlining, tab completion, `Ctrl-V` image paste, `!shell` escape
-- **Sessions**: save, resume, fork, and branch conversation history
+- **Sessions**: save, resume, fork, branch, and **export** conversation history (JSON or Markdown)
 - **Extensions**: drop-in Python extensions with custom `/slash` commands
+- **Themes**: customisable colours via `[theme]` in `~/.tau/config.toml`
+- **Configurable tool set**: disable or whitelist tools via `[tools]` config
 - **Auto-compaction**: automatic context trimming when the window fills up
 - **Auto-retry**: transparent retry on rate-limit and transient errors
 - **File & shell tools**: sandboxed read/write/search/edit/shell with confirmation

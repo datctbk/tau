@@ -3,7 +3,7 @@
 import json
 import pytest
 from pathlib import Path
-from tau.core.session import SessionManager, SessionNotFoundError
+from tau.core.session import SessionManager, SessionNotFoundError, export_session_markdown
 from tau.core.types import AgentConfig, ForkInfo
 
 
@@ -368,3 +368,55 @@ class TestForkFieldsRoundTrip:
         loaded = sm2.load("oldsess1")
         assert loaded.parent_id is None
         assert loaded.fork_index is None
+
+
+# ---------------------------------------------------------------------------
+# export_session_markdown
+# ---------------------------------------------------------------------------
+
+class TestExportSessionMarkdown:
+    def test_basic_export(self, sm: SessionManager):
+        session = sm.new_session(_cfg(), name="test-export")
+        msgs = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ]
+        sm.save(session, messages=msgs)
+        session = sm.load(session.id)
+        md = export_session_markdown(session)
+        assert "# Session: test-export" in md
+        assert "## [0] User" in md
+        assert "hello" in md
+        assert "## [1] Assistant" in md
+        assert "hi there" in md
+
+    def test_unnamed_session(self, sm: SessionManager):
+        session = sm.new_session(_cfg())
+        md = export_session_markdown(session)
+        assert "# Session: Untitled" in md
+
+    def test_tool_messages_in_code_block(self, sm: SessionManager):
+        session = sm.new_session(_cfg())
+        msgs = [
+            {"role": "tool", "content": "result text", "tool_call_id": "tc-1"},
+        ]
+        sm.save(session, messages=msgs)
+        session = sm.load(session.id)
+        md = export_session_markdown(session)
+        assert "```" in md
+        assert "result text" in md
+        assert "tc-1" in md
+
+    def test_includes_metadata(self, sm: SessionManager):
+        session = sm.new_session(_cfg(), name="meta-test")
+        md = export_session_markdown(session)
+        assert "openai/gpt-4o" in md
+        assert "**ID:**" in md
+        assert "**Provider:**" in md
+
+    def test_includes_token_usage(self, sm: SessionManager):
+        session = sm.new_session(_cfg())
+        session.cumulative_usage = {"input_tokens": 1000, "output_tokens": 500, "cache_read_tokens": 0, "cache_write_tokens": 0}
+        md = export_session_markdown(session)
+        assert "1,000" in md
+        assert "500" in md

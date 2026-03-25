@@ -470,3 +470,242 @@ class TestSlashCopy:
         # /help renders a Rich Panel; check the renderable content
         panel = prints[0]
         assert "/copy" in str(panel.renderable)
+
+
+# ===========================================================================
+# /export
+# ===========================================================================
+
+class TestSlashExport:
+    @staticmethod
+    def _agent_with_real_session() -> Agent:
+        """Build an agent with a real Session object (not a mock)."""
+        from datetime import datetime, timezone
+        config = _cfg()
+        context = ContextManager(config)
+        registry = ToolRegistry()
+        provider = MagicMock()
+        provider.chat.return_value = ProviderResponse(
+            content="ok", tool_calls=[], stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=5, output_tokens=5),
+        )
+        sm = MagicMock(spec=SessionManager)
+        sm.save.return_value = None
+        sm.append_compaction.return_value = None
+        now = datetime.now(timezone.utc).isoformat()
+        session = Session(
+            id="test-export-session",
+            name="test-export",
+            created_at=now,
+            updated_at=now,
+            config=config,
+        )
+        steering = SteeringChannel()
+        return Agent(
+            config=config, provider=provider, registry=registry,
+            context=context, session=session, session_manager=sm,
+            steering=steering,
+        )
+
+    def test_returns_true(self):
+        agent = self._agent_with_real_session()
+        handled, _ = _call("/export", agent)
+        assert handled is True
+
+    def test_no_agent(self):
+        handled, prints = _call("/export", None)
+        assert handled is True
+        output = str(prints[0]) if prints else ""
+        assert "requires" in output
+
+    def test_exports_json_to_stdout(self):
+        agent = self._agent_with_real_session()
+        agent._context.add_message(Message(role="user", content="hello"))
+        agent._context.add_message(Message(role="assistant", content="hi"))
+        handled, prints = _call("/export", agent)
+        assert handled is True
+        import json
+        output = str(prints[0])
+        parsed = json.loads(output)
+        assert "id" in parsed
+        assert "messages" in parsed
+
+    def test_exports_json_to_file(self, tmp_path):
+        agent = self._agent_with_real_session()
+        agent._context.add_message(Message(role="user", content="hello"))
+        out_file = tmp_path / "out.json"
+        handled, prints = _call(f"/export {out_file}", agent)
+        assert handled is True
+        import json
+        data = json.loads(out_file.read_text())
+        assert "messages" in data
+
+    def test_exports_markdown_to_file(self, tmp_path):
+        agent = self._agent_with_real_session()
+        agent._context.add_message(Message(role="user", content="hello"))
+        agent._context.add_message(Message(role="assistant", content="world"))
+        out_file = tmp_path / "out.md"
+        handled, prints = _call(f"/export {out_file}", agent)
+        assert handled is True
+        content = out_file.read_text()
+        assert "# Session:" in content
+        assert "User" in content
+        assert "Assistant" in content
+
+    def test_export_in_help_text(self):
+        handled, prints = _call("/help", None)
+        panel = prints[0]
+        assert "/export" in str(panel.renderable)
+
+
+# ===========================================================================
+# /reload
+# ===========================================================================
+
+class TestSlashReload:
+    @staticmethod
+    def _agent_with_tools() -> Agent:
+        """Build an agent with real registry/context and builtin tools registered."""
+        from tau.tools import register_builtin_tools
+        config = _cfg()
+        context = ContextManager(config)
+        registry = ToolRegistry()
+        register_builtin_tools(registry)
+        provider = MagicMock()
+        provider.chat.return_value = ProviderResponse(
+            content="ok", tool_calls=[], stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=5, output_tokens=5),
+        )
+        sm = MagicMock(spec=SessionManager)
+        sm.save.return_value = None
+        session = MagicMock(spec=Session)
+        session.id = "test-session"
+        session.messages = []
+        session.compactions = []
+        steering = SteeringChannel()
+        return Agent(
+            config=config, provider=provider, registry=registry,
+            context=context, session=session, session_manager=sm,
+            steering=steering,
+        )
+
+    def test_returns_true(self):
+        agent = self._agent_with_tools()
+        with patch.object(_cli_mod, "load_config") as mock_lc:
+            mock_lc.return_value = MagicMock(
+                system_prompt="sys", shell=MagicMock(), tools=MagicMock(enabled_only=[], disabled=[]),
+                skills=MagicMock(paths=[], disabled=[]), extensions=MagicMock(paths=[], disabled=[]),
+                theme=MagicMock(),
+            )
+            with patch("tau.context_files.load_system_prompt_override", return_value=None):
+                with patch("tau.context_files.load_context_files", return_value=""):
+                    handled, _ = _call("/reload", agent)
+        assert handled is True
+
+    def test_no_agent(self):
+        handled, prints = _call("/reload", None)
+        assert handled is True
+        assert "requires" in str(prints[0])
+
+    def test_reloads_tools(self):
+        """After /reload, builtin tools should be re-registered."""
+        agent = self._agent_with_tools()
+        original_tools = set(agent._registry.names())
+        assert "read_file" in original_tools
+
+        # Remove a tool to verify it comes back
+        agent._registry.unregister("read_file")
+        assert "read_file" not in agent._registry.names()
+
+        with patch.object(_cli_mod, "load_config") as mock_lc:
+            mock_lc.return_value = MagicMock(
+                system_prompt="sys", shell=MagicMock(), tools=MagicMock(enabled_only=[], disabled=[]),
+                skills=MagicMock(paths=[], disabled=[]), extensions=MagicMock(paths=[], disabled=[]),
+                theme=MagicMock(),
+            )
+            with patch("tau.context_files.load_system_prompt_override", return_value=None):
+                with patch("tau.context_files.load_context_files", return_value=""):
+                    _call("/reload", agent)
+
+        assert "read_file" in agent._registry.names()
+
+    def test_reloads_system_prompt(self):
+        """After /reload, the system prompt should be rebuilt from config."""
+        agent = self._agent_with_tools()
+        # Mutate the system message
+        for m in agent._context._messages:
+            if m.role == "system":
+                m.content = "old junk"
+                break
+
+        with patch.object(_cli_mod, "load_config") as mock_lc:
+            mock_lc.return_value = MagicMock(
+                system_prompt="fresh system prompt", shell=MagicMock(),
+                tools=MagicMock(enabled_only=[], disabled=[]),
+                skills=MagicMock(paths=[], disabled=[]), extensions=MagicMock(paths=[], disabled=[]),
+                theme=MagicMock(),
+            )
+            with patch("tau.context_files.load_system_prompt_override", return_value=None):
+                with patch("tau.context_files.load_context_files", return_value="ctx stuff"):
+                    _call("/reload", agent)
+
+        sys_msg = next(m for m in agent._context._messages if m.role == "system")
+        assert "fresh system prompt" in sys_msg.content
+        assert "ctx stuff" in sys_msg.content
+
+    def test_system_prompt_override(self):
+        """If .tau/SYSTEM.md exists, it should replace the default system prompt."""
+        agent = self._agent_with_tools()
+
+        with patch.object(_cli_mod, "load_config") as mock_lc:
+            mock_lc.return_value = MagicMock(
+                system_prompt="default", shell=MagicMock(),
+                tools=MagicMock(enabled_only=[], disabled=[]),
+                skills=MagicMock(paths=[], disabled=[]), extensions=MagicMock(paths=[], disabled=[]),
+                theme=MagicMock(),
+            )
+            with patch("tau.context_files.load_system_prompt_override", return_value="override prompt"):
+                with patch("tau.context_files.load_context_files", return_value=""):
+                    _call("/reload", agent)
+
+        sys_msg = next(m for m in agent._context._messages if m.role == "system")
+        assert sys_msg.content.startswith("override prompt")
+
+    def test_reloads_extensions(self):
+        """Extensions should be reloaded via ext_registry.reload()."""
+        agent = self._agent_with_tools()
+        ext_registry = MagicMock(spec=ExtensionRegistry)
+        ext_registry.reload.return_value = ["ext_a", "ext_b"]
+
+        steering = agent._steering
+        prints: list = []
+        with patch.object(_cli_mod, "console") as mock_console:
+            mock_console.print.side_effect = lambda *a, **kw: prints.append(a[0] if a else None)
+            with patch.object(_cli_mod, "load_config") as mock_lc:
+                mock_lc.return_value = MagicMock(
+                    system_prompt="sys", shell=MagicMock(),
+                    tools=MagicMock(enabled_only=[], disabled=[]),
+                    skills=MagicMock(paths=[], disabled=[]),
+                    extensions=MagicMock(paths=[], disabled=["x"]),
+                    theme=MagicMock(),
+                )
+                with patch("tau.context_files.load_system_prompt_override", return_value=None):
+                    with patch("tau.context_files.load_context_files", return_value=""):
+                        _cli_mod._handle_slash(
+                            "/reload", steering=steering,
+                            ext_registry=ext_registry, ext_context=None,
+                            agent=agent,
+                        )
+        ext_registry.reload.assert_called_once()
+        # Should report "extensions (2)"
+        output = str(prints[-1])
+        assert "extensions (2)" in output
+
+    def test_reload_in_help_text(self):
+        handled, prints = _call("/help", None)
+        panel = prints[0]
+        assert "/reload" in str(panel.renderable)
+
+    def test_reload_in_builtin_commands(self):
+        from tau.editor import BUILTIN_SLASH_COMMANDS
+        assert "reload" in BUILTIN_SLASH_COMMANDS

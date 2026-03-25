@@ -510,6 +510,17 @@ disabled = []
 [extensions]
 paths    = ["~/my-extensions"]
 disabled = ["word_count"]    # opt out of a built-in
+
+[theme]
+user_color      = "cyan"     # customise any Rich style name
+assistant_color = "green"
+tool_color      = "yellow"
+accent_color    = "cyan"
+border_style    = "dim"
+
+[tools]
+disabled     = ["run_bash"]  # disable specific built-in tools
+# enabled_only = ["read_file", "list_dir"]  # OR: whitelist only these
 ```
 
 Environment variables always override config file values (`TAU_PROVIDER`, `TAU_MODEL`, `TAU_EXTENSIONS_DISABLED`, etc.).
@@ -648,5 +659,11 @@ No LangChain, no heavy framework. The core is hand-rolled and stays under ~2 klo
 | **System prompt override** (`.tau/SYSTEM.md`) | ✅ done | `test_context_files.py` |
 | **Prompt templates** (`{{variables}}`) | ✅ done | `test_prompts.py` |
 | **Editor richness** (@file, tab, image paste, !shell) | ✅ done | `test_editor.py` (40 tests) |
+| **SDK** (`TauSession`, `create_session`) | ✅ done | `test_sdk.py` |
+| **RPC** (JSONL-over-stdio protocol) | ✅ done | `test_rpc.py` |
+| **/copy** slash command | ✅ done | `test_slash_commands.py` |
+| **Session export** (JSON + Markdown) | ✅ done | `test_session.py`, `test_slash_commands.py` |
+| **Themes** (configurable Rich colors) | ✅ done | `test_theme_and_tools_config.py` |
+| **Configurable tool set** (disabled / enabled_only) | ✅ done | `test_theme_and_tools_config.py`, `test_tool_registry.py` |
 
-**Total: 450 tests, all passing.**
+**Total: 527 tests, all passing.**

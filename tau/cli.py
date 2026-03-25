@@ -46,6 +46,47 @@ console = Console()
 err_console = Console(stderr=True)
 _stream_console = Console(highlight=False, markup=False, soft_wrap=True)
 
+
+# ---------------------------------------------------------------------------
+# Theme — centralised colours loaded from config
+# ---------------------------------------------------------------------------
+class _Theme:
+    """Lazy theme that reads from TauConfig on first access."""
+    _loaded: bool = False
+    user_color: str = "cyan"
+    assistant_color: str = "green"
+    tool_color: str = "yellow"
+    system_color: str = "dim"
+    error_color: str = "red"
+    accent_color: str = "cyan"
+    success_color: str = "green"
+    warning_color: str = "yellow"
+    border_style: str = "dim"
+
+    @classmethod
+    def load(cls, tau_config: "TauConfig | None" = None, *, force: bool = False) -> None:
+        if cls._loaded and not force:
+            return
+        if tau_config is None:
+            try:
+                tau_config = load_config()
+            except Exception:
+                pass
+        if tau_config is not None:
+            t = tau_config.theme
+            cls.user_color = t.user_color
+            cls.assistant_color = t.assistant_color
+            cls.tool_color = t.tool_color
+            cls.system_color = t.system_color
+            cls.error_color = t.error_color
+            cls.accent_color = t.accent_color
+            cls.success_color = t.success_color
+            cls.warning_color = t.warning_color
+            cls.border_style = t.border_style
+        cls._loaded = True
+
+theme = _Theme()
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -97,6 +138,17 @@ def _build_agent(
 ) -> tuple[Agent, ExtensionRegistry]:
     registry = ToolRegistry()
     register_builtin_tools(registry)
+
+    # Apply configurable tool set: disabled / enabled_only
+    if tau_config.tools.enabled_only:
+        allowed = set(tau_config.tools.enabled_only)
+        for name in list(registry.names()):
+            if name not in allowed:
+                registry.unregister(name)
+    elif tau_config.tools.disabled:
+        for name in tau_config.tools.disabled:
+            registry.unregister(name)
+
     configure_shell(
         require_confirmation=tau_config.shell.require_confirmation,
         timeout=tau_config.shell.timeout,
@@ -259,8 +311,8 @@ def _render_events(
                 _writeln(f"  ▶ {event.call.name} ({args_display})")
             else:
                 console.print(Text.assemble(
-                    ("  ▶ ", Style(color="yellow", bold=True)),
-                    (event.call.name, Style(color="cyan", bold=True)),
+                    ("  ▶ ", Style(color=theme.tool_color, bold=True)),
+                    (event.call.name, Style(color=theme.accent_color, bold=True)),
                     (f"({args_display})", Style(color="white", dim=True)),
                 ))
         elif isinstance(event, ToolResultEvent):
@@ -273,7 +325,7 @@ def _render_events(
             if output_fn:
                 _writeln(f"  {icon} result:\n    {preview}")
             else:
-                style = "red dim" if r.is_error else "green dim"
+                style = f"{theme.error_color} dim" if r.is_error else f"{theme.success_color} dim"
                 console.print(Panel(
                     Text(preview, style=style),
                     title=Text(f"{icon} result", style=style),
@@ -395,6 +447,8 @@ _SLASH_HELP = (
     "  /tokens        show current token usage\n"
     "  /tree          browse & branch the session history in-place\n"
     "  /copy          copy last assistant message to clipboard\n"
+    "  /export [file]  export session as JSON (or .md for markdown)\n"
+    "  /reload        hot-reload config, extensions, skills, context files\n"
     "  /prompt <name> [k=v …]  expand a prompt template and send it\n"
     "  /prompts       list available prompt templates\n"
     "  /help          show this message\n"
@@ -867,6 +921,113 @@ def _handle_slash(
             _print("[yellow]  \u26a0 Clipboard tool not found. Install pbcopy (macOS), xclip (Linux), or clip (Windows).[/yellow]")
         except Exception as exc:
             _print(f"[red]  \u2717 copy failed: {exc}[/red]")
+        return True
+
+    if keyword == "/export":
+        if agent is None:
+            _print("[dim]  /export requires an active session.[/dim]")
+            return True
+        session = agent._session
+        # Sync messages into session before export
+        session.messages = [m.to_dict() if hasattr(m, "to_dict") else ({"role": m.role, "content": m.content} if hasattr(m, "role") else m) for m in agent._context.get_messages()]
+        if arg and arg.endswith(".md"):
+            from tau.core.session import export_session_markdown
+            content = export_session_markdown(session)
+        else:
+            content = json.dumps(session.to_dict(), indent=2)
+        if arg:
+            out_path = Path(arg).resolve()
+            out_path.write_text(content, encoding="utf-8")
+            _print(Text.assemble(
+                ("  \u2713 ", Style(color="green", bold=True)),
+                ("exported to ", Style(color="green")),
+                (str(out_path), Style(color="cyan")),
+                (f"  ({len(session.messages)} messages)", Style(dim=True)),
+            ))
+        else:
+            _print(content)
+        return True
+
+    if keyword == "/reload":
+        if agent is None:
+            _print("[dim]  /reload requires an active session.[/dim]")
+            return True
+
+        reloaded: list[str] = []
+
+        # 1. Re-read config
+        tau_cfg = load_config()
+        theme.load(tau_cfg, force=True)
+        reloaded.append("config")
+
+        # 2. Rebuild system prompt from scratch
+        workspace = agent._config.workspace_root
+        base_prompt = tau_cfg.system_prompt
+        from tau.context_files import load_system_prompt_override, load_context_files
+        override = load_system_prompt_override(workspace)
+        if override is not None:
+            base_prompt = override
+        # Reset system message to base (before re-injecting fragments)
+        for m in agent._context._messages:
+            if m.role == "system":
+                m.content = base_prompt
+                break
+        # Re-inject context files
+        ctx_text = load_context_files(workspace)
+        if ctx_text:
+            agent._context.inject_prompt_fragment(ctx_text)
+        reloaded.append("context files")
+
+        # 3. Clear tool registry and re-register builtins
+        from tau.tools import register_builtin_tools
+        agent._registry._tools.clear()
+        register_builtin_tools(agent._registry)
+        # Re-apply shell/fs configuration
+        from tau.tools.shell import configure_shell
+        from tau.tools.fs import configure_fs
+        configure_shell(
+            require_confirmation=tau_cfg.shell.require_confirmation,
+            timeout=tau_cfg.shell.timeout,
+            allowed_commands=tau_cfg.shell.allowed_commands,
+            use_persistent_shell=tau_cfg.shell.use_persistent_shell,
+        )
+        configure_fs(workspace_root=workspace)
+        # Apply tool filtering
+        if tau_cfg.tools.enabled_only:
+            allowed = set(tau_cfg.tools.enabled_only)
+            for name in list(agent._registry.names()):
+                if name not in allowed:
+                    agent._registry.unregister(name)
+        elif tau_cfg.tools.disabled:
+            for name in tau_cfg.tools.disabled:
+                agent._registry.unregister(name)
+
+        # 4. Clear cached skill modules and reload
+        import sys as _sys
+        for key in [k for k in _sys.modules if k.startswith("tau_skill_")]:
+            del _sys.modules[key]
+        loader = SkillLoader(
+            extra_paths=tau_cfg.skills.paths,
+            disabled=tau_cfg.skills.disabled,
+        )
+        loader.load_into(agent._registry, agent._context)
+        reloaded.append("skills")
+
+        # 5. Reload extensions
+        if ext_registry is not None:
+            names = ext_registry.reload(
+                registry=agent._registry,
+                context=agent._context,
+                steering=steering,
+                console_print=console.print,
+                disabled=tau_cfg.extensions.disabled,
+            )
+            reloaded.append(f"extensions ({len(names)})")
+
+        _print(Text.assemble(
+            ("  ✓ reloaded: ", Style(color="green", bold=True)),
+            (", ".join(reloaded), Style(color="green")),
+        ))
         return True
 
     if keyword == "/image":
@@ -1370,6 +1531,7 @@ def run_cmd(
     _setup_logging(verbose)
     ensure_tau_home()
     tau_config = load_config()
+    theme.load(tau_config)
     agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, persistent_shell)
     session_manager = SessionManager()
     steering = SteeringChannel()
@@ -1456,12 +1618,12 @@ def sessions_show(session_id: str) -> None:
         f"[bold]Created:[/bold]  {session.created_at[:19]}\n"
         f"[bold]Updated:[/bold]  {session.updated_at[:19]}\n"
         f"[bold]Messages:[/bold] {len(session.messages)}",
-        title="Session", border_style="cyan",
+        title="Session", border_style=theme.accent_color,
     ))
     for i, msg in enumerate(session.messages):
         role = msg.get("role", "?")
         content = (msg.get("content") or "")[:200]
-        style = {"user": "cyan", "assistant": "green", "tool": "yellow", "system": "dim"}.get(role, "white")
+        style = {"user": theme.user_color, "assistant": theme.assistant_color, "tool": theme.tool_color, "system": theme.system_color}.get(role, "white")
         console.print(f"[{style}][{i}] {role}:[/{style}] {content}")
 
 @sessions_group.command("delete")
@@ -1549,6 +1711,33 @@ def sessions_fork_points(session_id: str) -> None:
             (f"  [{fp.index:3}]  ", Style(color="cyan", bold=True)),
             (fp.content, Style(dim=True)),
         ))
+
+@sessions_group.command("export")
+@click.argument("session_id")
+@click.option("--format", "-f", "fmt", type=click.Choice(["json", "markdown"]), default="json", help="Export format.")
+@click.option("--output", "-o", "output_file", default=None, help="Write to file instead of stdout.")
+def sessions_export(session_id: str, fmt: str, output_file: str | None) -> None:
+    """Export a session as JSON or Markdown."""
+    sm = SessionManager()
+    try:
+        session = sm.load(session_id)
+    except Exception as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+    if fmt == "markdown":
+        from tau.core.session import export_session_markdown
+        content = export_session_markdown(session)
+    else:
+        content = json.dumps(session.to_dict(), indent=2)
+    if output_file:
+        Path(output_file).write_text(content, encoding="utf-8")
+        console.print(Text.assemble(
+            ("  \u2713 ", Style(color="green", bold=True)),
+            ("exported to ", Style(color="green")),
+            (output_file, Style(color="cyan")),
+        ))
+    else:
+        click.echo(content)
 
 # ---------------------------------------------------------------------------
 # `tau prompts` subcommands

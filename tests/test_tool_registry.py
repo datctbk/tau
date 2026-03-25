@@ -57,3 +57,18 @@ def test_all_definitions():
     reg.register(_make_tool("a"))
     reg.register(_make_tool("b"))
     assert {t.name for t in reg.all_definitions()} == {"a", "b"}
+
+
+def test_unregister_removes_tool():
+    reg = ToolRegistry()
+    reg.register(_make_tool("a"))
+    reg.register(_make_tool("b"))
+    reg.unregister("a")
+    assert reg.names() == ["b"]
+    with pytest.raises(ToolNotFoundError):
+        reg.get("a")
+
+
+def test_unregister_nonexistent_is_noop():
+    reg = ToolRegistry()
+    reg.unregister("ghost")  # should not raise
