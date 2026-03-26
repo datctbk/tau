@@ -296,19 +296,53 @@ def _render_events(
         from tau.tools import shell as _shell_mod
         _shell_mod._confirm_hook = _confirm_with_flush
 
+    # Spinner for plain stdout mode (non-TUI)
+    import threading as _thr
+    _SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    _spin_stop = _thr.Event()
+    _first_output = [False]  # flipped True once any visible output arrives
+
+    def _spin_loop() -> None:
+        idx = 0
+        while not _spin_stop.is_set():
+            if _first_output[0]:
+                return
+            sys.stdout.write(f"\r  {_SPIN[idx % len(_SPIN)]} thinking...")
+            sys.stdout.flush()
+            idx += 1
+            _spin_stop.wait(0.08)
+        # clear spinner line
+        sys.stdout.write("\r" + " " * 20 + "\r")
+        sys.stdout.flush()
+
+    if output_fn is None:
+        _spin_thread = _thr.Thread(target=_spin_loop, daemon=True)
+        _spin_thread.start()
+
+    def _stop_spinner() -> None:
+        if not _first_output[0]:
+            _first_output[0] = True
+            _spin_stop.set()
+            if output_fn is None:
+                sys.stdout.write("\r" + " " * 20 + "\r")
+                sys.stdout.flush()
+
     for event in agent.run(user_input, images=images):
         if ext_registry is not None:
             ext_registry.fire_hooks(event)
         if isinstance(event, TextDelta):
             if event.is_thinking:
                 continue
+            _stop_spinner()
             if not is_streaming:
                 is_streaming = True
             stream_buffer.append(event.text)
             _write(event.text)
         elif isinstance(event, TextChunk):
+            _stop_spinner()
             _flush_stream(end_line=True)
         elif isinstance(event, ToolCallEvent):
+            _stop_spinner()
             _flush_stream(end_line=True)
             args_display = ", ".join(
                 f"{k}={str(v)[:60]!r}" for k, v in event.call.arguments.items()
@@ -322,6 +356,7 @@ def _render_events(
                     (f"({args_display})", Style(color="white", dim=True)),
                 ))
         elif isinstance(event, ToolResultEvent):
+            _stop_spinner()
             r = event.result
             icon = "✗" if r.is_error else "✓"
             preview_lines = r.content.splitlines()[:5]
@@ -339,6 +374,7 @@ def _render_events(
                     padding=(0, 1),
                 ))
         elif isinstance(event, TurnComplete):
+            _stop_spinner()
             _flush_stream(end_line=True)
             u = event.usage
             tau_config = load_config()
@@ -362,6 +398,7 @@ def _render_events(
             else:
                 console.print(f"[dim]  ↳ tokens: {u.input_tokens} in / {u.output_tokens} out{cost_str}[/dim]")
         elif isinstance(event, CompactionEvent):
+            _stop_spinner()
             _flush_stream(end_line=True)
             if event.stage == "start":
                 _writeln(f"  ⟳ compacting context ({event.tokens_before:,} tokens)")
@@ -372,24 +409,30 @@ def _render_events(
                     saved = event.tokens_before - event.tokens_after
                     _writeln(f"  ✓ compacted {event.tokens_before:,} → {event.tokens_after:,} tokens (saved {saved:,})")
         elif isinstance(event, RetryEvent):
+            _stop_spinner()
             _flush_stream(end_line=True)
             _writeln(f"  ↻ retrying (attempt {event.attempt}/{event.max_attempts}) in {event.delay:.1f}s — {event.error[:80]}")
         elif isinstance(event, SteerEvent):
+            _stop_spinner()
             _flush_stream(end_line=True)
             _writeln(f"  ⇢ steered ↳ {event.new_input[:80]}")
             _writeln("─" * 60)
         elif isinstance(event, ExtensionLoadError):
+            _stop_spinner()
             _flush_stream(end_line=True)
             _writeln(f"  ⚠ extension {event.extension_name!r} failed: {event.error}")
         elif isinstance(event, ErrorEvent):
+            _stop_spinner()
             _flush_stream(end_line=False)
             _writeln(f"Error: {event.message}")
         elif isinstance(event, CostLimitExceeded):
+            _stop_spinner()
             _flush_stream(end_line=True)
             if output_fn:
                 _writeln(f"  ⚠ budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f} — stopping session")
             else:
                 console.print(f"[bold red]  ⚠ budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f} — stopping session[/bold red]")
+    _stop_spinner()
     _flush_stream(end_line=True)
 
 # ---------------------------------------------------------------------------
@@ -1252,26 +1295,49 @@ def _repl(
     input_buffer = Buffer(name="input", completer=_completer, complete_while_typing=False)
 
     # -- helpers -------------------------------------------------------------
+    # A lock + snapshot ensure that _get_output_text and _get_cursor_position
+    # see a consistent view of output_text_parts during a single render cycle,
+    # preventing IndexError when the spinner invalidates mid-append.
+    _output_lock = threading.Lock()
+    _text_snapshot: list[str] = [""]
+
     def _get_output_text() -> ANSI:
-        return ANSI("".join(output_text_parts))
+        with _output_lock:
+            _text_snapshot[0] = "".join(output_text_parts)
+        return ANSI(_text_snapshot[0])
 
     def _get_cursor_position() -> Point:
-        # prompt_toolkit splits by \n, so y is exactly the number of \n characters.
-        y = sum(text.count('\n') for text in output_text_parts)
-        # Set x large enough so that when wrapping, prompt_toolkit keeps the END of the wrapped line visible!
+        # Use the snapshot captured by _get_output_text (always called first
+        # during a render) so y never exceeds the actual line count.
+        y = _text_snapshot[0].count('\n')
         return Point(x=999999, y=y)
 
     def _append_output(text: str) -> None:
-        output_text_parts.append(text)
+        with _output_lock:
+            output_text_parts.append(text)
         if app_ref[0]:
             app_ref[0].invalidate()
+
+    _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    _spinner_idx = [0]
+    _spinner_timer: list[threading.Timer | None] = [None]
+
+    def _tick_spinner() -> None:
+        if agent_running.is_set() and not confirm_pending.is_set():
+            _spinner_idx[0] = (_spinner_idx[0] + 1) % len(_SPINNER_FRAMES)
+            if app_ref[0]:
+                app_ref[0].invalidate()
+            _spinner_timer[0] = threading.Timer(0.08, _tick_spinner)
+            _spinner_timer[0].daemon = True
+            _spinner_timer[0].start()
 
     def _get_prompt_prefix() -> list[tuple[str, str]]:
         if confirm_pending.is_set():
             return [("bold fg:ansiyellow", "allow? [y/N] ")]
         if agent_running.is_set():
-            return [("bold fg:ansimagenta", "steer ")]
-        return [("bold fg:ansicyan", "you ")]
+            frame = _SPINNER_FRAMES[_spinner_idx[0]]
+            return [("bold fg:ansimagenta", f"{frame} ")]
+        return [("bold fg:ansicyan", "> ")]
 
     # -- agent runner --------------------------------------------------------
     _YELLOW = "\033[33m"
@@ -1293,6 +1359,8 @@ def _repl(
 
     def _run_agent(user_input: str) -> None:
         agent_running.set()
+        _spinner_idx[0] = 0
+        _tick_spinner()
         if app_ref[0]:
             app_ref[0].invalidate()
         try:
@@ -1308,6 +1376,9 @@ def _repl(
             _append_output(f"\nError: {exc}\n")
         finally:
             agent_running.clear()
+            if _spinner_timer[0]:
+                _spinner_timer[0].cancel()
+                _spinner_timer[0] = None
             if app_ref[0]:
                 app_ref[0].invalidate()
 
@@ -1366,12 +1437,12 @@ def _repl(
         if inlined_files:
             n = len(inlined_files)
             names = ", ".join(Path(f).name for f in inlined_files)
-            _append_output(f"\n{_BOLD}{_CYAN}you{_RESET} {text}\n")
+            _append_output(f"\n{_BOLD}{_CYAN}>{_RESET} {text}\n")
             _append_output(f"{_DIM}  📎 {n} file{'s' if n > 1 else ''} inlined: {names}{_RESET}\n")
             _append_output(f"{_DIM}{'─' * 60}{_RESET}\n")
             text = expanded
         else:
-            _append_output(f"\n{_BOLD}{_CYAN}you{_RESET} {text}\n" + f"{_DIM}{'─' * 60}{_RESET}\n")
+            _append_output(f"\n{_BOLD}{_CYAN}>{_RESET} {text}\n" + f"{_DIM}{'─' * 60}{_RESET}\n")
         threading.Thread(
             target=_run_agent, args=(text,), daemon=True
         ).start()
