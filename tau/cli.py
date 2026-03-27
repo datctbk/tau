@@ -1297,19 +1297,24 @@ def _repl(
     # -- helpers -------------------------------------------------------------
     # A lock + snapshot ensure that _get_output_text and _get_cursor_position
     # see a consistent view of output_text_parts during a single render cycle,
-    # preventing IndexError when the spinner invalidates mid-append.
+    # preventing IndexError when the spinner or /tree invalidates mid-append.
     _output_lock = threading.Lock()
-    _text_snapshot: list[str] = [""]
+    _parsed_line_count: list[int] = [1]
 
     def _get_output_text() -> ANSI:
         with _output_lock:
-            _text_snapshot[0] = "".join(output_text_parts)
-        return ANSI(_text_snapshot[0])
+            joined = "".join(output_text_parts)
+        ansi = ANSI(joined)
+        # Count actual fragment lines so _get_cursor_position stays in bounds.
+        from prompt_toolkit.formatted_text import to_formatted_text
+        from prompt_toolkit.formatted_text.utils import split_lines
+        _parsed_line_count[0] = len(list(split_lines(to_formatted_text(ansi))))
+        return ansi
 
     def _get_cursor_position() -> Point:
-        # Use the snapshot captured by _get_output_text (always called first
-        # during a render) so y never exceeds the actual line count.
-        y = _text_snapshot[0].count('\n')
+        # Use the line count captured by _get_output_text (always called first
+        # during a render) so y never exceeds the actual fragment_lines length.
+        y = max(0, _parsed_line_count[0] - 1)
         return Point(x=999999, y=y)
 
     def _append_output(text: str) -> None:
