@@ -120,6 +120,7 @@ _AGENT_OPTIONS = [
     click.option("--var", multiple=True, help="Set template variable: --var key=value (repeatable)."),
     click.option("--max-cost", "max_cost", type=float, default=None, help="USD budget ceiling; stop session when exceeded."),
     click.option("--no-session", is_flag=True, default=False, help="Ephemeral mode: don't persist the session to disk."),
+    click.option("--trace-log", "trace_log", default=None, help="Log full LLM requests/responses to a file for debugging."),
 ]
 
 def _agent_options(fn):
@@ -1585,6 +1586,7 @@ def run_cmd(
     var: tuple[str, ...],
     max_cost: float | None,
     no_session: bool,
+    trace_log: str | None,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
     # Resolve output mode: --print flag takes precedence as shorthand
@@ -1622,6 +1624,10 @@ def run_cmd(
             mode = "print"
 
     _setup_logging(verbose)
+    from tau.core.trace import configure_trace
+    configure_trace(trace_log)
+    if trace_log:
+        console.print(f"[dim]Trace logging to: {trace_log}[/dim]")
     ensure_tau_home()
     tau_config = load_config()
     theme.load(tau_config)

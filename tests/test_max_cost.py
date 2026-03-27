@@ -305,7 +305,7 @@ class TestNoSessionCLI:
                 no_confirm=False, no_parallel=False, persistent_shell=False,
                 workspace=".", verbose=False, output_mode=None,
                 print_mode=False, template_name=None, var=(),
-                max_cost=None, no_session=True,
+                max_cost=None, no_session=True, trace_log=None,
             )
 
             # Check that _build_agent was called with an InMemorySessionManager
@@ -341,7 +341,7 @@ class TestNoSessionCLI:
                 no_confirm=False, no_parallel=False, persistent_shell=False,
                 workspace=".", verbose=False, output_mode=None,
                 print_mode=False, template_name=None, var=(),
-                max_cost=None, no_session=False,
+                max_cost=None, no_session=False, trace_log=None,
             )
 
             call_kwargs = mock_build.call_args

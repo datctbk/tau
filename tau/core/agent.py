@@ -29,6 +29,7 @@ from tau.core.types import (
     AfterToolCallResult,
     ToolResult,
 )
+from tau.core import trace as _trace
 
 if TYPE_CHECKING:
     from tau.core.context import ContextManager
@@ -326,14 +327,18 @@ class Agent:
 
         for attempt in range(1, max_attempts + 1):
             try:
+                messages = self._context.get_messages()
+                tools = self._registry.all_definitions()
+                _trace.log_request(messages, tools)
                 raw = self._provider.chat(
-                    messages=self._context.get_messages(),
-                    tools=self._registry.all_definitions(),
+                    messages=messages,
+                    tools=tools,
                 )
                 return raw, None
 
             except Exception as exc:  # noqa: BLE001
                 last_error = str(exc)
+                _trace.log_error(last_error)
                 logger.warning("Provider error (attempt %d/%d): %s", attempt, max_attempts, last_error)
 
                 # Context overflow → compact & signal a full turn retry
@@ -451,6 +456,7 @@ class Agent:
         had_deltas is True when at least one TextDelta was emitted.
         """
         if isinstance(raw, ProviderResponse):
+            _trace.log_response(raw)
             return raw, False, None
 
         had_deltas = False
@@ -484,9 +490,12 @@ class Agent:
                     response = item
         except Exception as exc:  # noqa: BLE001
             logger.exception("Error consuming provider stream")
+            _trace.log_error(str(exc))
             yield ErrorEvent(message=f"Stream error: {exc}")
             return None, had_deltas, None
 
+        if response is not None:
+            _trace.log_response(response)
         return response, had_deltas, None
 
     def _persist(self) -> None:
