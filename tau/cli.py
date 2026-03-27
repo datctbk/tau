@@ -113,7 +113,8 @@ _AGENT_OPTIONS = [
     click.option("--no-parallel", is_flag=True, default=False, help="Disable parallel tool execution."),
     click.option("--persistent-shell", is_flag=True, default=False, help="Use a persistent bash session across turns."),
     click.option("--workspace", "-w", default=".", show_default=True, help="Workspace root path."),
-    click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging and show model thinking tokens."),
+    click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging."),
+    click.option("--show-thinking", is_flag=True, default=False, help="Stream model thinking/reasoning tokens (dim italic)."),
     click.option("--mode", "output_mode", type=click.Choice(["interactive", "print", "json", "rpc"]), default=None, help="Output mode: interactive (REPL), print (text only), json (JSONL events), rpc (JSONL over stdio)."),
     click.option("--print", "-P", "print_mode", is_flag=True, default=False, help="Shorthand for --mode print."),
     click.option("--template", "-T", "template_name", default=None, help="Use a prompt template by name (from .tau/prompts/ or ~/.tau/prompts/)."),
@@ -261,6 +262,7 @@ def _render_events(
     images: list[str] | None = None,
     ext_registry: ExtensionRegistry | None = None,
     output_fn: "Callable[[str], None] | None" = None,
+    show_thinking: bool = False,
 ) -> None:
     """Render agent events. If output_fn is provided, all output is sent there
     (for TUI mode). Otherwise writes to sys.stdout / console."""
@@ -333,6 +335,15 @@ def _render_events(
             ext_registry.fire_hooks(event)
         if isinstance(event, TextDelta):
             if event.is_thinking:
+                if not show_thinking:
+                    continue
+                _stop_spinner()
+                # Dim italic for thinking tokens
+                if output_fn:
+                    _write(event.text)
+                else:
+                    sys.stdout.write(f"\033[2;3m{event.text}\033[0m")
+                    sys.stdout.flush()
                 continue
             _stop_spinner()
             if not is_streaming:
@@ -1207,6 +1218,7 @@ def _repl(
     verbose: bool = False,
     ext_registry: ExtensionRegistry | None = None,
     staged_images: list[str] | None = None,
+    show_thinking: bool = False,
 ) -> None:
     steering: SteeringChannel | None = agent._steering
     ext_context: ExtensionContext | None = None
@@ -1377,6 +1389,7 @@ def _repl(
                 images=imgs if imgs else None,
                 ext_registry=ext_registry,
                 output_fn=_append_output,
+                show_thinking=show_thinking,
             )
         except Exception as exc:
             _append_output(f"\nError: {exc}\n")
@@ -1580,6 +1593,7 @@ def run_cmd(
     persistent_shell: bool,
     workspace: str,
     verbose: bool,
+    show_thinking: bool,
     output_mode: str | None,
     print_mode: bool,
     template_name: str | None,
@@ -1685,9 +1699,9 @@ def run_cmd(
             sys.exit(1)
         _render_events_print(agent, prompt, images=list(image) if image else None, ext_registry=ext_registry)
     elif prompt:
-        _render_events(agent, prompt, verbose, images=list(image) if image else None, ext_registry=ext_registry)
+        _render_events(agent, prompt, verbose, images=list(image) if image else None, ext_registry=ext_registry, show_thinking=show_thinking)
     else:
-        _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None)
+        _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None, show_thinking=show_thinking)
 
 # ---------------------------------------------------------------------------
 # `tau sessions` subcommands

@@ -303,7 +303,7 @@ class TestNoSessionCLI:
                 provider=None, model=None, think=None,
                 image=(), resume_id=None, session_name=None,
                 no_confirm=False, no_parallel=False, persistent_shell=False,
-                workspace=".", verbose=False, output_mode=None,
+                workspace=".", verbose=False, show_thinking=False, output_mode=None,
                 print_mode=False, template_name=None, var=(),
                 max_cost=None, no_session=True, trace_log=None,
             )
@@ -339,7 +339,7 @@ class TestNoSessionCLI:
                 provider=None, model=None, think=None,
                 image=(), resume_id=None, session_name=None,
                 no_confirm=False, no_parallel=False, persistent_shell=False,
-                workspace=".", verbose=False, output_mode=None,
+                workspace=".", verbose=False, show_thinking=False, output_mode=None,
                 print_mode=False, template_name=None, var=(),
                 max_cost=None, no_session=False, trace_log=None,
             )

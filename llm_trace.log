@@ -1,0 +1,122 @@
+# tau trace log — 2026-03-27T14:20:24.556874+00:00
+# ======================================================================
+
+────────────────────────────────────────────────────────────────────────
+▶ REQUEST  turn=1  time=14:20:41
+────────────────────────────────────────────────────────────────────────
+
+Messages (2):
+  --- message 0 ---
+  [SYSTEM]
+    You are tau, a minimal CLI coding agent. Use the available tools to help the user with coding tasks. Be concise and precise.
+    
+    You also have access to example skill tools for demonstration purposes.
+  --- message 1 ---
+  [USER]
+    explain how alphafold work assume i'm beginner
+
+Tools (8):
+  • read_file(path: string, start_line: integer (optional), end_line: integer (optional))
+  • write_file(path: string, content: string)
+  • edit_file(path: string, old_str: string, new_str: string)
+  • list_dir(path: string (optional))
+  • search_files(pattern: string, path: string (optional), use_regex: boolean (optional))
+  • run_bash(command: string, workdir: string (optional))
+  • pretty_print_json(json_string: string, indent: integer (optional))
+  • word_count(text: string)
+
+────────────────────────────────────────────────────────────────────────
+◀ RESPONSE  turn=1  time=14:21:32
+────────────────────────────────────────────────────────────────────────
+
+  stop_reason: end_turn
+  usage: 1115 in / 1054 out
+
+  Content:
+    # How AlphaFold Works (For Beginners)
+    
+    ## The Problem: Why Do We Need AlphaFold?
+    
+    **Imagine this:** A protein is like a folded ribbon. It has a sequence of letters (amino acids), but its 3D shape determines what it does. Knowing that sequence, figuring out the 3D shape is extremely hard—like predicting how a piece of string will fold without being able to touch it.
+    
+    For decades, scientists had to experimentally determine protein structures (using X-ray crystallography or cryo-EM), which could take months or years.
+    
+    ---
+    
+    ## What AlphaFold Is
+    
+    **AlphaFold** is an AI model developed by **DeepMind (Google)** that predicts a protein's 3D structure from its amino acid sequence with unprecedented accuracy.
+    
+    ---
+    
+    ## The Big Idea: It's Like Learning from a Million Puzzle Examples
+    
+    Think of AlphaFold like someone who:
+    1. Solved **millions** of protein structures that scientists had already determined
+    2. Learned the patterns and relationships
+    3. Now can predict new ones by finding similar patterns
+    
+    ---
+    
+    ## The Core Trick: EvoFormer Architecture
+    
+    AlphaFold doesn't just memorize—it learns **physical and evolutionary patterns**.
+    
+    ### Key Insight: Evolution is a Free Teacher
+    
+    Proteins that evolved separately often converged on similar shapes. If two proteins have:
+    - **Similar sequences** → Likely similar shapes
+    - **Related evolutionary history** → Likely similar shapes
+    
+    AlphaFold uses **evolutionary data** as training hints. It looks at how proteins evolved over billions of years to understand structure!
+    
+    ---
+    
+    ## How It Works (Step by Step)
+    
+    ### **Step 1: Input — The Sequence**
+    ```
+    Input: "MGV...V..." (400-500 amino acids)
+             |
+             v
+    ```
+    
+    ### **Step 2: Multi-Sequence Alignment (MSA)**
+    - Finds all known similar sequences in databases
+    - Creates a "family tree" of related proteins
+    - This gives AlphaFold clues about which amino acids interact
+    
+    ### **Step 3: The EvoFormer (The Brain)**
+    - An attention-based neural network
+    - Processes sequence and evolutionary data
+    - **Attention mechanism** lets it focus on important parts of the protein
+    - Outputs: How confident AlphaFold is that certain amino acids should be near each other
+    
+    ### **Step 4: Structure Module (The Builder)**
+    - Actually builds the 3D coordinates (x, y, z for each atom)
+    - Uses a "template-free" approach—doesn't need a starting model
+    - Outputs: The final 3D structure
+    
+    ---
+    
+    ## What Makes AlphaFold Revolutionary
+    
+    | Before | After AlphaFold |
+    |--------|-----------------|
+    | Months/years of experiments | Minutes on a computer |
+    | Accuracy ~60-70% | Accuracy ~90% |
+    | Needed heavy experiments | No experiments needed |
+    | Hard to predict complex shapes | Can handle most proteins |
+    
+    ---
+    
+    ## The Analogy That Helps
+    
+    **Think of AlphaFold like a master puzzle solver:**
+    
+    1. **Training:** Given a million solved puzzles with their box pictures (known structures)
+    2. **Learning:** Notices that certain puzzle pieces (amino acids) always fit together in certain ways
+    3. **Prediction:** Given a new puzzle, finds simila
+      ... (3927 chars total, truncated)
+
+
