@@ -268,6 +268,7 @@ def _render_events(
     (for TUI mode). Otherwise writes to sys.stdout / console."""
     stream_buffer: list[str] = []
     is_streaming = False
+    _in_thinking = False  # track whether we're currently in a thinking block
 
     def _write(text: str) -> None:
         if output_fn:
@@ -280,7 +281,15 @@ def _render_events(
         _write(text + "\n")
 
     def _flush_stream(end_line: bool = True) -> None:
-        nonlocal is_streaming
+        nonlocal is_streaming, _in_thinking
+        if _in_thinking:
+            # Close thinking styling
+            if output_fn:
+                _write("\033[0m")
+            else:
+                sys.stdout.write("\033[0m")
+                sys.stdout.flush()
+            _in_thinking = False
         if not is_streaming:
             return
         is_streaming = False
@@ -338,13 +347,29 @@ def _render_events(
                 if not show_thinking:
                     continue
                 _stop_spinner()
-                # Dim italic for thinking tokens
+                # Start thinking block: dim italic + gray color
+                if not _in_thinking:
+                    _in_thinking = True
+                    # \033[2m = dim, \033[3m = italic, \033[90m = dark gray
+                    if output_fn:
+                        _write("\033[2;3;90m")
+                    else:
+                        sys.stdout.write("\033[2;3;90m")
+                        sys.stdout.flush()
                 if output_fn:
                     _write(event.text)
                 else:
-                    sys.stdout.write(f"\033[2;3m{event.text}\033[0m")
+                    sys.stdout.write(event.text)
                     sys.stdout.flush()
                 continue
+            # Transition from thinking → answer: close styling, add separator
+            if _in_thinking:
+                if output_fn:
+                    _write("\033[0m\n")
+                else:
+                    sys.stdout.write("\033[0m\n")
+                    sys.stdout.flush()
+                _in_thinking = False
             _stop_spinner()
             if not is_streaming:
                 is_streaming = True
