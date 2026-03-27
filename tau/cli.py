@@ -120,7 +120,7 @@ _AGENT_OPTIONS = [
     click.option("--var", multiple=True, help="Set template variable: --var key=value (repeatable)."),
     click.option("--max-cost", "max_cost", type=float, default=None, help="USD budget ceiling; stop session when exceeded."),
     click.option("--no-session", is_flag=True, default=False, help="Ephemeral mode: don't persist the session to disk."),
-    click.option("--trace-log", "trace_log", default=None, help="Log full LLM requests/responses to a file for debugging."),
+    click.option("--trace-log", "trace_log", is_flag=False, flag_value="__default__", default=None, help="Log full LLM requests/responses to a file (default: <workspace>/tau-trace.log)."),
 ]
 
 def _agent_options(fn):
@@ -1624,6 +1624,9 @@ def run_cmd(
             mode = "print"
 
     _setup_logging(verbose)
+    # Resolve trace log path: flag without value → default in workspace
+    if trace_log == "__default__":
+        trace_log = str(Path(workspace).resolve() / "tau-trace.log")
     from tau.core.trace import configure_trace
     configure_trace(trace_log)
     if trace_log:
