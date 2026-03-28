@@ -212,6 +212,14 @@ def run_inline_shell(command: str, workspace_root: str, timeout: int = 30) -> st
     Only for **user-initiated** inline commands (``!ls``, ``!git status``).
     These bypass the agent and run directly.
     """
+    import platform
+    env = os.environ.copy()
+    if platform.system() == "Darwin":
+        # Suppress macOS MallocStackLogging noise injected by the debugger
+        # shim into every spawned subprocess.
+        env.pop("MallocStackLogging", None)
+        env.pop("MallocStackLoggingDirectory", None)
+        env["MallocStackLogging"] = "0"
     try:
         result = subprocess.run(
             command,
@@ -220,12 +228,23 @@ def run_inline_shell(command: str, workspace_root: str, timeout: int = 30) -> st
             text=True,
             timeout=timeout,
             cwd=workspace_root,
+            env=env,
         )
+        # Filter residual MallocStackLogging lines that slip through via the
+        # dynamic linker before env changes take effect.
+        def _filter_malloc_noise(text: str) -> str:
+            lines = [
+                l for l in text.splitlines()
+                if "MallocStackLogging" not in l
+            ]
+            return "\n".join(lines) + ("\n" if lines else "")
+
         parts: list[str] = []
         if result.stdout:
             parts.append(result.stdout)
-        if result.stderr:
-            parts.append(result.stderr)
+        stderr_clean = _filter_malloc_noise(result.stderr) if result.stderr else ""
+        if stderr_clean.strip():
+            parts.append(stderr_clean)
         output = "".join(parts)
         if result.returncode != 0:
             output += f"\n[exit code {result.returncode}]"

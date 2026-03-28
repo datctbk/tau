@@ -1244,6 +1244,7 @@ def _repl(
     ext_registry: ExtensionRegistry | None = None,
     staged_images: list[str] | None = None,
     show_thinking: bool = False,
+    tau_config: "TauConfig | None" = None,
 ) -> None:
     steering: SteeringChannel | None = agent._steering
     ext_context: ExtensionContext | None = None
@@ -1362,6 +1363,60 @@ def _repl(
             output_text_parts.append(text)
         if app_ref[0]:
             app_ref[0].invalidate()
+
+    # -- footer data ---------------------------------------------------------
+    import shutil as _shutil
+    _footer_tau_config = [tau_config if tau_config is not None else load_config()]
+
+    def _get_footer_line1() -> ANSI:
+        ws_name = Path(agent._config.workspace_root).name
+        model = agent._config.model
+        thinking = agent._config.thinking_level
+        think_str = f" [{thinking}]" if thinking and thinking != "off" else ""
+        left_plain = f"  {ws_name}"
+        right_plain = f"{model}{think_str}  "
+        try:
+            width = _shutil.get_terminal_size().columns
+        except Exception:
+            width = 80
+        pad = max(1, width - len(left_plain) - len(right_plain))
+        return ANSI(
+            f"  {_DIM}{ws_name}{_RESET}"
+            f"{' ' * pad}"
+            f"{_CYAN}{model}{_DIM}{think_str}{_RESET}  "
+        )
+
+    def _get_footer_line2() -> ANSI:
+        cu = getattr(agent._session, "cumulative_usage", {})
+        in_tok = cu.get("input_tokens", 0)
+        out_tok = cu.get("output_tokens", 0)
+        cache_r = cu.get("cache_read_tokens", 0)
+        cache_w = cu.get("cache_write_tokens", 0)
+        ctx_used = agent._context.token_count()
+        budget = agent._config.max_tokens
+        pct = int(ctx_used / budget * 100) if budget and ctx_used else 0
+
+        class _DU:
+            input_tokens = in_tok
+            output_tokens = out_tok
+            cache_read_tokens = cache_r
+            cache_write_tokens = cache_w
+
+        cost = _footer_tau_config[0].calculate_cost(agent._config.model, _DU())
+        cost_str = f"${cost:.4f}" if cost > 0 else "$0.0000"
+        pct_color = "\033[32m" if pct < 70 else "\033[33m" if pct < 90 else "\033[31m"
+        if budget >= 1_000_000:
+            budget_str = f"{budget // 1_000_000}M"
+        elif budget >= 1_000:
+            budget_str = f"{budget // 1_000}k"
+        else:
+            budget_str = str(budget)
+        return ANSI(
+            f"  {_DIM}{cost_str}"
+            f"  ↑{in_tok:,}"
+            f"  ↓{out_tok:,}"
+            f"  {pct_color}{pct}%/{budget_str} ctx{_RESET}"
+        )
 
     _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _spinner_idx = [0]
@@ -1598,6 +1653,9 @@ def _repl(
         ),
         Window(height=1, char="─", style="class:separator"),
         input_window,
+        Window(height=1, char="─", style="class:separator"),
+        Window(height=1, content=FormattedTextControl(_get_footer_line1, focusable=False)),
+        Window(height=1, content=FormattedTextControl(_get_footer_line2, focusable=False)),
     ])
 
     layout = Layout(
@@ -1619,7 +1677,7 @@ def _repl(
         layout=layout,
         key_bindings=kb,
         full_screen=True,
-        mouse_support=True,
+        mouse_support=False,  # disabled so the terminal can handle native text selection
     )
     app_ref[0] = application
     application.run()
@@ -1766,7 +1824,7 @@ def run_cmd(
     elif prompt:
         _render_events(agent, prompt, verbose, images=list(image) if image else None, ext_registry=ext_registry, show_thinking=show_thinking)
     else:
-        _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None, show_thinking=show_thinking)
+        _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None, show_thinking=show_thinking, tau_config=tau_config)
 
 # ---------------------------------------------------------------------------
 # `tau sessions` subcommands
