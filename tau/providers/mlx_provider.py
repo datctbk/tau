@@ -139,7 +139,12 @@ class MLXProvider:
 
         content_parts: list[str] = []
         buffer = ""
-        in_thinking = False
+        # When enable_thinking is used, the chat template appends "<think>\n"
+        # to the prompt, so the model output starts *inside* the think block
+        # (no leading <think> tag).  Detect this and enter thinking state
+        # immediately so thinking tokens are correctly marked.
+        prompt_starts_thinking = self._enable_thinking and prompt.rstrip().endswith("<think>")
+        in_thinking = prompt_starts_thinking
         thinking_done = False
         prompt_tokens = len(self._tokenizer.encode(prompt))
         output_tokens = 0
@@ -257,12 +262,21 @@ def _to_tool_dict(t: ToolDefinition) -> dict[str, Any]:
 
 
 def _split_thinking(text: str) -> tuple[str, str | None]:
-    """Split response into (content, thinking). Strips <think>…</think>."""
+    """Split response into (content, thinking). Strips <think>…</think>.
+
+    Also handles the case where the chat template already added <think> to the
+    prompt, so the model output only contains ``…</think>content``.
+    """
+    # Case 1: full <think>…</think> block present
     match = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
     if match:
         thinking = match.group(1).strip()
         content = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
         return content, thinking
+    # Case 2: only </think> (opening tag was in the prompt)
+    if "</think>" in text:
+        thinking_text, _, content = text.partition("</think>")
+        return content.strip(), thinking_text.strip() or None
     return text.strip(), None
 
 
