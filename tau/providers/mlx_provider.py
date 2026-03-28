@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import uuid
 from collections.abc import Generator
 from typing import Any
+
+# Suppress the harmless macOS malloc stack logging noise emitted by Metal/MLX.
+os.environ.setdefault("MallocStackLogging", "0")
 
 from tau.config import TauConfig
 from tau.core.types import (
