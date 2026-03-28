@@ -139,13 +139,11 @@ class MLXProvider:
 
         content_parts: list[str] = []
         buffer = ""
-        # When enable_thinking is used, the chat template appends "<think>\n"
-        # to the prompt, so the model output starts *inside* the think block
-        # (no leading <think> tag).  Detect this and enter thinking state
-        # immediately so thinking tokens are correctly marked.
-        prompt_starts_thinking = self._enable_thinking and prompt.rstrip().endswith("<think>")
-        in_thinking = prompt_starts_thinking
-        thinking_done = False
+        # Qwen3 models always emit <think>...</think> blocks.
+        # If the prompt already ends with <think> (the chat template appended
+        # it), we are already inside the block — no opening tag will appear.
+        in_thinking = prompt.rstrip().endswith("<think>")
+        think_search_done = in_thinking  # already committed to think state
         prompt_tokens = len(self._tokenizer.encode(prompt))
         output_tokens = 0
 
@@ -161,11 +159,11 @@ class MLXProvider:
             output_tokens += 1
             buffer += token
 
-            # --- State: waiting to see if a <think> block starts ----------
-            if not thinking_done and not in_thinking:
+            # --- State: scanning for opening <think> ----------------------
+            if not think_search_done and not in_thinking:
                 if "<think>" in buffer:
+                    think_search_done = True
                     in_thinking = True
-                    # Anything before <think> is content
                     before, _, after = buffer.partition("<think>")
                     if before.strip():
                         content_parts.append(before)
@@ -175,9 +173,9 @@ class MLXProvider:
                         yield TextDelta(text=buffer, is_thinking=True)
                         buffer = ""
                     continue
-                # If we've buffered enough without seeing <think>, give up waiting
+                # Buffer enough chars; if no <think> found, treat as content
                 if len(buffer) > 12:
-                    thinking_done = True
+                    think_search_done = True
                     content_parts.append(buffer)
                     yield TextDelta(text=buffer)
                     buffer = ""
@@ -190,7 +188,7 @@ class MLXProvider:
                     if thinking_text:
                         yield TextDelta(text=thinking_text, is_thinking=True)
                     in_thinking = False
-                    thinking_done = True
+                    think_search_done = True
                     buffer = rest.lstrip("\n")
                     if buffer:
                         content_parts.append(buffer)
@@ -206,13 +204,16 @@ class MLXProvider:
             yield TextDelta(text=token)
             buffer = ""
 
-        # Flush remaining buffer
+        # Flush remaining buffer (strip bare </think> if model ended mid-tag)
         if buffer:
+            stripped = buffer.replace("</think>", "")
             if in_thinking:
-                yield TextDelta(text=buffer, is_thinking=True)
+                if stripped:
+                    yield TextDelta(text=stripped, is_thinking=True)
             else:
-                content_parts.append(buffer)
-                yield TextDelta(text=buffer)
+                if stripped:
+                    content_parts.append(stripped)
+                    yield TextDelta(text=stripped)
 
         final_content = "".join(content_parts).strip()
         tool_calls = _parse_tool_calls(final_content)
