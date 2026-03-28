@@ -8,7 +8,7 @@
 | Principle | Description |
 |-----------|-------------|
 | **Minimal core** | The core does one thing: run an agent loop (LLM ↔ tools). No bloat. |
-| **Provider-agnostic** | Swap Google, OpenAI, Ollama, or any future provider via a unified interface. |
+| **Provider-agnostic** | Swap Google, OpenAI, Ollama, MLX, or any future provider via a unified interface. |
 | **Tool-first** | The agent reasons by calling tools. Tools are first-class, declarative, and sandboxed. |
 | **Extensible** | Skills (YAML + tools.py) and the new Extension system let anyone add tools, slash commands, event hooks, and prompt fragments at runtime. |
 | **Session-aware** | Conversations have identity, history, branching, and can be resumed. |
@@ -51,6 +51,7 @@
    │ openai          │   │ + ext tools     │   │ event hooks     │
    │ google          │   │                 │   │ prompt frags    │
    │ ollama          │   └─────────────────┘   └─────────────────┘
+   │ mlx             │           │                      │
    └─────────────────┘           │                      │
                         ┌────────▼──────────────────────▼────────┐
                         │         Skill Loader  (legacy)          │
@@ -82,7 +83,8 @@ tau/
 │   │   ├── base.py              # BaseProvider protocol
 │   │   ├── openai_provider.py
 │   │   ├── google_provider.py
-│   │   └── ollama_provider.py
+│   │   ├── ollama_provider.py
+│   │   └── mlx_provider.py      # Apple Silicon local via mlx-lm
 │   │
 │   ├── tools/
 │   │   ├── fs.py                # read/write/edit/list/search

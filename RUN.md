@@ -149,6 +149,11 @@ api_key = "..."
 [providers.ollama]
 base_url = "http://localhost:11434"
 
+[mlx]
+temperature       = 0.7     # sampling temperature
+top_p             = 0.9     # nucleus sampling
+repetition_penalty = 1.05   # penalise repeated tokens
+
 [tools.shell]
 require_confirmation = true
 timeout = 30
@@ -167,6 +172,9 @@ export TAU_MODEL=gpt-4o
 export OPENAI_API_KEY=sk-...
 export GOOGLE_API_KEY=...
 export OLLAMA_BASE_URL=http://localhost:11434
+export MLX_TEMPERATURE=0.7
+export MLX_TOP_P=0.9
+export MLX_REPETITION_PENALTY=1.05
 export TAU_SHELL_REQUIRE_CONFIRMATION=false
 export TAU_SHELL_TIMEOUT=60
 ```
@@ -619,6 +627,11 @@ tau run -p google -m gemini-2.5-pro "hello"
 tau run -p ollama -m llama3 "hello"
 tau run -p ollama -m codellama "explain this code"
 tau run -p ollama -m mistral "hello"
+
+# MLX (Apple Silicon local, no key)
+# Requires: pip install mlx-lm  (and an Apple Silicon Mac with 24GB+ RAM)
+tau run -p mlx -m mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit "hello"
+tau run -p mlx -m mlx-community/Llama-3.3-70B-Instruct-4bit "explain this code"
 ```
 
 ---

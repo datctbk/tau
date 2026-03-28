@@ -51,6 +51,13 @@ class OllamaProviderConfig(BaseSettings):
     base_url: str = "http://localhost:11434"
 
 
+class MLXProviderConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="MLX_")
+    temperature: float = 0.7
+    top_p: float = 0.9
+    repetition_penalty: float = 1.05
+
+
 class ShellToolConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TAU_SHELL_")
     require_confirmation: bool = True
@@ -142,6 +149,7 @@ class TauConfig(BaseSettings):
     openai: OpenAIProviderConfig = OpenAIProviderConfig()
     google: GoogleProviderConfig = GoogleProviderConfig()
     ollama: OllamaProviderConfig = OllamaProviderConfig()
+    mlx: MLXProviderConfig = MLXProviderConfig()
 
     # tool / skill sub-configs
     shell: ShellToolConfig = ShellToolConfig()

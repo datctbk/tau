@@ -25,6 +25,9 @@ dependencies = [
 tau = "tau.cli:main"
 
 [project.optional-dependencies]
+mlx = [
+    "mlx-lm>=0.20",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

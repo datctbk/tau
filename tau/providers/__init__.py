@@ -22,6 +22,10 @@ def get_provider(config: TauConfig, agent_config: AgentConfig):
         from tau.providers.ollama_provider import OllamaProvider
         return OllamaProvider(config, agent_config)
 
+    if name == "mlx":
+        from tau.providers.mlx_provider import MLXProvider
+        return MLXProvider(config, agent_config)
+
     raise ValueError(
-        f"Unknown provider {name!r}. Available: openai, google, ollama"
+        f"Unknown provider {name!r}. Available: openai, google, ollama, mlx"
     )

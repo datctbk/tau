@@ -12,7 +12,7 @@ tau                        # interactive REPL
 
 ## Features
 
-- **Multi-provider**: OpenAI, Google Gemini, Ollama (local) — swap with `-p` / `-m`
+- **Multi-provider**: OpenAI, Google Gemini, Ollama (local), MLX (Apple Silicon local) — swap with `-p` / `-m`
 - **Output modes**: interactive (rich TUI), print (`-P`), JSON (`--mode json`), and RPC (`--mode rpc`) for process integration
 - **Piped stdin**: `echo "prompt" | tau run` auto-detects non-TTY and uses print mode
 - **SDK**: `from tau import create_session` — embed tau in your Python apps
@@ -35,5 +35,6 @@ tau                        # interactive REPL
 | openai   | `OPENAI_API_KEY` |
 | google   | `GOOGLE_API_KEY` |
 | ollama   | *(local, no key needed)* |
+| mlx      | *(local Apple Silicon, no key needed)* |
 
 See [RUN.md](RUN.md) for the full usage guide and [DESIGN.md](DESIGN.md) for the architecture.
