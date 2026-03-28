@@ -1307,6 +1307,7 @@ def _repl(
     app_ref: list[Application | None] = [None]
     output_text_parts: list[str] = []
     _staged_images = staged_images or []
+    _scroll_offset: list[int] = [0]  # 0 = follow bottom; >0 = lines from bottom
 
     # Shell confirmation synchronisation (agent thread ↔ UI thread)
     confirm_pending = threading.Event()      # set while waiting for user answer
@@ -1324,6 +1325,7 @@ def _repl(
         f"{_BOLD}{_CYAN}tau v{_tau_version()}{_RESET}"
         f"  {_MAGENTA}{agent_config.provider}/{agent_config.model}{_RESET}"
         f"  {_DIM}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
+        + f"{_DIM}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom{_RESET}\n"
         + f"{_DIM}{'═' * 60}{_RESET}\n"
     )
     output_text_parts.append(header)
@@ -1352,8 +1354,8 @@ def _repl(
     def _get_cursor_position() -> Point:
         # Use the line count captured by _get_output_text (always called first
         # during a render) so y never exceeds the actual fragment_lines length.
-        y = max(0, _parsed_line_count[0] - 1)
-        return Point(x=999999, y=y)
+        y = max(0, _parsed_line_count[0] - 1 - _scroll_offset[0])
+        return Point(x=0, y=y)
 
     def _append_output(text: str) -> None:
         with _output_lock:
@@ -1430,6 +1432,7 @@ def _repl(
     def _on_enter(event: object) -> None:
         text = input_buffer.text.strip()
         input_buffer.reset()
+        _scroll_offset[0] = 0  # reset scroll to bottom on new input
 
         # If we're waiting for a shell confirmation answer, handle it here
         if confirm_pending.is_set():
@@ -1507,6 +1510,43 @@ def _repl(
             buff.complete_next()
         else:
             buff.start_completion(select_first=False)
+
+    @kb.add("s-up")
+    def _scroll_up(event: object) -> None:
+        """Scroll output up by one line."""
+        max_offset = max(0, _parsed_line_count[0] - 1)
+        _scroll_offset[0] = min(_scroll_offset[0] + 1, max_offset)
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("s-down")
+    def _scroll_down(event: object) -> None:
+        """Scroll output down by one line."""
+        _scroll_offset[0] = max(0, _scroll_offset[0] - 1)
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("pageup")
+    def _page_up(event: object) -> None:
+        """Scroll output up by 20 lines."""
+        max_offset = max(0, _parsed_line_count[0] - 1)
+        _scroll_offset[0] = min(_scroll_offset[0] + 20, max_offset)
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("pagedown")
+    def _page_down(event: object) -> None:
+        """Scroll output down by 20 lines."""
+        _scroll_offset[0] = max(0, _scroll_offset[0] - 20)
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("end")
+    def _scroll_bottom(event: object) -> None:
+        """Scroll to the bottom (latest output)."""
+        _scroll_offset[0] = 0
+        if app_ref[0]:
+            app_ref[0].invalidate()
 
     @kb.add("c-v")
     def _paste_image(event: object) -> None:

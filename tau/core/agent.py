@@ -462,6 +462,7 @@ class Agent:
         had_deltas = False
         response: ProviderResponse | None = None
         delta_count = 0
+        thinking_parts: list[str] = []
 
         try:
             for item in raw:
@@ -480,20 +481,28 @@ class Agent:
                             pass
                     except Exception:  # noqa: BLE001
                         pass
+                    if thinking_parts:
+                        _trace.log_thinking("".join(thinking_parts))
                     return None, had_deltas, steer_msg
 
                 if isinstance(item, TextDelta):
                     had_deltas = True
                     delta_count += 1
+                    if item.is_thinking:
+                        thinking_parts.append(item.text)
                     yield item
                 elif isinstance(item, ProviderResponse):
                     response = item
         except Exception as exc:  # noqa: BLE001
             logger.exception("Error consuming provider stream")
             _trace.log_error(str(exc))
+            if thinking_parts:
+                _trace.log_thinking("".join(thinking_parts))
             yield ErrorEvent(message=f"Stream error: {exc}")
             return None, had_deltas, None
 
+        if thinking_parts:
+            _trace.log_thinking("".join(thinking_parts))
         if response is not None:
             _trace.log_response(response)
         return response, had_deltas, None

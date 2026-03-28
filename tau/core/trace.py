@@ -145,6 +145,25 @@ def log_response(response: ProviderResponse) -> None:
     _write("\n".join(lines) + "\n")
 
 
+def log_thinking(thinking_text: str) -> None:
+    """Log model thinking/reasoning content."""
+    if _trace_path is None or not thinking_text:
+        return
+    lines: list[str] = []
+    lines.append(f"{'─' * 72}")
+    lines.append(f"💭 THINKING  turn={_turn_counter}  time={datetime.now(timezone.utc).strftime('%H:%M:%S')}")
+    lines.append(f"{'─' * 72}")
+    lines.append("")
+    if len(thinking_text) > 5000:
+        lines.append(thinking_text[:5000])
+        lines.append(f"  ... ({len(thinking_text)} chars total, truncated)")
+    else:
+        lines.append(thinking_text)
+    lines.append("")
+    lines.append("")
+    _write("\n".join(lines) + "\n")
+
+
 def log_error(error: str) -> None:
     """Log a provider error."""
     if _trace_path is None:
