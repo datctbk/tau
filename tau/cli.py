@@ -160,6 +160,7 @@ def _build_agent(
         allowed_commands=tau_config.shell.allowed_commands,
         use_persistent_shell=tau_config.shell.use_persistent_shell,
         confirm_hook=confirm_hook,
+        workspace_root=agent_config.workspace_root,
     )
     configure_fs(workspace_root=agent_config.workspace_root)
     configure_context(
@@ -1388,6 +1389,7 @@ def _handle_slash(
             timeout=tau_cfg.shell.timeout,
             allowed_commands=tau_cfg.shell.allowed_commands,
             use_persistent_shell=tau_cfg.shell.use_persistent_shell,
+            workspace_root=workspace,
         )
         configure_fs(workspace_root=workspace)
         # Apply tool filtering

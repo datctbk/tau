@@ -148,6 +148,7 @@ class MLXProvider:
         # it), we are already inside the block — no opening tag will appear.
         in_thinking = prompt.rstrip().endswith("<think>")
         think_search_done = in_thinking  # already committed to think state
+        in_tool_call = False              # suppress <tool_call>…</tool_call> from display
         prompt_tokens = len(self._tokenizer.encode(prompt))
         output_tokens = 0
 
@@ -203,21 +204,48 @@ class MLXProvider:
                     buffer = ""
                 continue
 
-            # --- State: normal content ------------------------------------
+            # --- State: inside <tool_call> block (suppress from display) --
+            if in_tool_call:
+                if "</tool_call>" in buffer:
+                    in_tool_call = False
+                    # Keep accumulated buffer for final parsing; emit nothing
+                    content_parts.append(buffer)
+                    buffer = ""
+                # else: still accumulating — don't emit anything
+                continue
+
+            # --- State: normal content — watch for <tool_call> opening ----
+            if "<tool_call>" in buffer:
+                before, _, after = buffer.partition("<tool_call>")
+                if before:
+                    content_parts.append(before)
+                    yield TextDelta(text=before)
+                # Re-attach the tag so _parse_tool_calls can find it later
+                buffer = "<tool_call>" + after
+                in_tool_call = True
+                continue
+
+            # Hold partial tag prefixes in the buffer rather than emitting early
+            if "<" in buffer and not buffer.endswith(">") and not buffer.endswith("\n"):
+                continue
+
             content_parts.append(token)
             yield TextDelta(text=token)
             buffer = ""
 
-        # Flush remaining buffer (strip bare </think> if model ended mid-tag)
+        # Flush remaining buffer
         if buffer:
             stripped = buffer.replace("</think>", "")
             if in_thinking:
                 if stripped:
                     yield TextDelta(text=stripped, is_thinking=True)
-            else:
+            elif not in_tool_call:
                 if stripped:
                     content_parts.append(stripped)
                     yield TextDelta(text=stripped)
+            else:
+                # Incomplete tool_call block — still keep for parsing
+                content_parts.append(buffer)
 
         final_content = "".join(content_parts).strip()
         tool_calls = _parse_tool_calls(final_content)

@@ -17,6 +17,7 @@ _shell_config: dict[str, Any] = {
     "timeout": 30,
     "allowed_commands": [],
     "use_persistent_shell": False,
+    "workspace_root": ".",
 }
 
 _persistent_shell: PersistentShell | None = None
@@ -28,14 +29,20 @@ class PersistentShell:
     def __init__(self, timeout: int = 30) -> None:
         self.timeout = timeout
         import uuid
+        import os
         self._sentinel = f"__TAU_CMD_DONE_{uuid.uuid4()}__"
+        self._initial_cwd = os.getcwd()
+        # Strip macOS memory-debugging env vars so they don't leak into
+        # child processes (e.g. javac) and produce MallocStackLogging noise.
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("Malloc")}
         self._process = subprocess.Popen(
-            ["bash", "--noprofile", "--norc", "-i"],
+            ["bash", "--noprofile", "--norc"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=clean_env,
         )
         # Flush the initial interactive bash prompt
         self._execute("echo started")
@@ -46,8 +53,12 @@ class PersistentShell:
             self.__init__(self.timeout)
 
         full_cmd = command
-        if workdir and workdir != ".":
-            full_cmd = f"cd {shlex.quote(workdir)} && {command}"
+        if workdir:
+            import os
+            # Resolve relative workdir against initial CWD so the path is
+            # stable regardless of where previous commands left the shell.
+            abs_workdir = os.path.abspath(os.path.join(self._initial_cwd, workdir))
+            full_cmd = f"cd {shlex.quote(abs_workdir)} && {command}"
 
         # We wrap the command to emit the sentinel even if it fails
         # and to capture the exit code.
@@ -108,11 +119,13 @@ def configure_shell(
     allowed_commands: list[str],
     use_persistent_shell: bool = False,
     confirm_hook: Callable[[str], bool] | None = None,
+    workspace_root: str = ".",
 ) -> None:
     _shell_config["require_confirmation"] = require_confirmation
     _shell_config["timeout"] = timeout
     _shell_config["allowed_commands"] = allowed_commands
     _shell_config["use_persistent_shell"] = use_persistent_shell
+    _shell_config["workspace_root"] = workspace_root
     global _confirm_hook
     _confirm_hook = confirm_hook
 
@@ -132,7 +145,7 @@ def _is_allowed(command: str) -> bool:
     return any(first_token.startswith(a) for a in allowed)
 
 
-def run_bash(command: str, workdir: str = ".") -> str:
+def run_bash(command: str, workdir: str = "") -> str:
     if not _is_allowed(command):
         return f"Error: command not in allowlist — {command!r}"
 
@@ -141,21 +154,27 @@ def run_bash(command: str, workdir: str = ".") -> str:
         if not confirm(command):
             return "Cancelled by user."
 
+    effective_workdir = workdir or _shell_config["workspace_root"]
+
     if _shell_config.get("use_persistent_shell"):
         global _persistent_shell
         if _persistent_shell is None:
             _persistent_shell = PersistentShell(timeout=_shell_config["timeout"])
-        return _persistent_shell.execute(command, workdir=workdir)
+        return _persistent_shell.execute(command, workdir=effective_workdir)
 
     logger.debug("run_bash (ephemeral): %s", command)
+    import os
+    clean_env = {k: v for k, v in os.environ.items() if not k.startswith("Malloc")}
     try:
         result = subprocess.run(
             command,
             shell=True,
-            cwd=workdir,
+            executable="/bin/bash",
+            cwd=effective_workdir,
             capture_output=True,
             text=True,
             timeout=_shell_config["timeout"],
+            env=clean_env,
         )
     except subprocess.TimeoutExpired:
         return f"Error: command timed out after {_shell_config['timeout']}s"
@@ -185,7 +204,7 @@ SHELL_TOOLS: list[ToolDefinition] = [
             ),
             "workdir": ToolParameter(
                 type="string",
-                description="Working directory for the command. Defaults to '.'.",
+                description="Working directory for the command. Defaults to the workspace root.",
                 required=False,
             ),
         },
