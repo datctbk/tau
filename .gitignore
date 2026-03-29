@@ -6,3 +6,4 @@ tau/providers/__pycache__/
 tau/skills/__pycache__/
 tau/tools/__pycache__/
 tests/__pycache__/
+llm_trace.log

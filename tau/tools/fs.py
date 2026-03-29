@@ -57,6 +57,10 @@ def write_file(path: str, content: str) -> str:
 
 def edit_file(path: str, old_str: str, new_str: str) -> str:
     p = _resolve(path)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"{path!r} does not exist. Use write_file to create it first."
+        )
     original = p.read_text(encoding="utf-8")
     if old_str not in original:
         raise ValueError(
