@@ -541,6 +541,9 @@ _SLASH_HELP = (
     "  /think <level> hot-swap the reasoning effort (off, low, medium, high)\n"
     "  /tokens        show current token usage\n"
     "  /tree          browse & branch the session history in-place\n"
+    "  /fork [name]   fork session at current position into a named branch\n"
+    "  /bookmark      list bookmarks for current session\n"
+    "  /bookmark <i> [label]  toggle bookmark at message index i\n"
     "  /copy          copy last assistant message to clipboard\n"
     "  /export [file]  export session as JSON (or .md for markdown)\n"
     "  /reload        hot-reload config, extensions, skills, context files\n"
@@ -576,24 +579,28 @@ _TREE_RED    = "\033[31m"
 _TREE_GREEN  = "\033[32m"
 
 
-def _tree_navigator(agent: "Agent", output_fn: "Callable[[str], None]") -> None:
+def _tree_navigator(
+    agent: "Agent",
+    output_fn: "Callable[[str], None]",
+    reset_fn: "Callable[[], None] | None" = None,
+) -> None:
     """
-    Full-screen, keyboard-driven branch navigator.
+    Full-screen session tree navigator with cross-branch navigation and bookmarks.
 
-    Renders a scrollable list of every message in the current session.
     Keys
     ────
-      ↑ / k      move cursor up
-      ↓ / j      move cursor down
-      Enter       branch: restore context to the selected message index
-                  (forks to a new saved session, then replaces the live context)
-      f           fork only: save a new session file at the selected point
-                  without touching the live context
-      Escape / q  cancel and return to the REPL
-
-    The navigator runs as a *blocking* prompt_toolkit Application that takes
-    over the full screen, just like the REPL itself.  On exit it hands control
-    back to the surrounding REPL application.
+      ↑ / k        move cursor up
+      ↓ / j        move cursor down
+      PgUp/PgDn    scroll 10 lines
+      g / Home     first message
+      G / End      last message
+      Enter        branch: fork + restore context to selected message
+      f            fork-only: save branch without changing live context
+      b            toggle bookmark on selected message
+      B            jump to next bookmark
+      → / l        navigate into a child branch (if any at selected row)
+      ← / h        go back to parent session view
+      Esc / q      cancel and return to REPL
     """
     from prompt_toolkit import Application
     from prompt_toolkit.key_binding import KeyBindings
@@ -601,92 +608,284 @@ def _tree_navigator(agent: "Agent", output_fn: "Callable[[str], None]") -> None:
     from prompt_toolkit.layout.controls import FormattedTextControl
     from prompt_toolkit.formatted_text import ANSI
 
-    messages = agent._session.messages
-    if not messages:
-        output_fn("  [dim]  /tree  — no messages in session yet.[/dim]\n")
+    sm = agent._session_manager
+
+    # ── nav frame helpers ────────────────────────────────────────────────
+
+    def _load_frame(session: "object") -> "dict":
+        """Build a navigation frame dict for *session*."""
+        branches: "dict[int, list]" = {}
+        try:
+            for child_meta in sm.list_branches(session.id):
+                idx = child_meta.fork_index
+                if idx is not None:
+                    branches.setdefault(idx, []).append(child_meta)
+        except Exception:
+            pass
+        return {
+            "session": session,
+            "branches": branches,
+            "bookmarked": {b["index"] for b in session.bookmarks},
+        }
+
+    if not agent._session.messages:
+        output_fn("  \033[2m/tree — no messages in session yet.\033[0m\n")
         return
 
-    total = len(messages)
-    cursor: list[int] = [total - 1]   # start at the bottom (most recent)
-    status: list[str] = [""]          # one-line status shown at bottom
+    _nav_stack: "list[dict]" = [_load_frame(agent._session)]
 
-    # ── helpers ──────────────────────────────────────────────────────────
+    cursor: "list[int]" = [len(agent._session.messages) - 1]
+    status: "list[str]" = [""]
+    # mode: "list" | "pick_child"
+    mode: "list[str]" = ["list"]
+    pick_children: "list" = []
+    pick_cursor: "list[int]" = [0]
+    result: "list[str | None]" = [None]   # "branch" | "fork" | None
+    app_ref: "list[Application | None]" = [None]
+
+    # ── frame accessors ──────────────────────────────────────────────────
+
+    def _frame() -> "dict":
+        return _nav_stack[-1]
+
+    def _cur_session() -> "object":
+        return _frame()["session"]
+
+    def _cur_msgs() -> "list":
+        return _cur_session().messages
+
+    def _cur_bookmarked() -> "set":
+        return _frame()["bookmarked"]
+
+    def _cur_branches() -> "dict":
+        return _frame()["branches"]
+
+    # ── rendering ────────────────────────────────────────────────────────
 
     def _row(idx: int, selected: bool) -> str:
-        msg    = messages[idx]
-        role   = msg.get("role", "?")
-        icon   = _TREE_ROLE_ICON.get(role, "?")
+        msgs = _cur_msgs()
+        msg = msgs[idx]
+        role = msg.get("role", "?")
+        icon = _TREE_ROLE_ICON.get(role, "?")
         colour = _TREE_ROLE_COLOUR.get(role, "")
-        # content preview: first non-empty line, max 72 chars
+
         raw = msg.get("content") or ""
-        if isinstance(raw, list):          # multipart (e.g. vision)
-            raw = " ".join(
-                p.get("text", "") for p in raw if isinstance(p, dict)
-            )
-        preview = raw.replace("\n", " ").strip()[:72]
-        # tool-call badge
-        badge = ""
+        if isinstance(raw, list):
+            raw = " ".join(p.get("text", "") for p in raw if isinstance(p, dict))
+        preview = raw.replace("\n", " ").strip()[:58]
+
+        extra_badges: "list[str]" = []
         if msg.get("tool_calls"):
             n = len(msg["tool_calls"])
-            badge = f" {_TREE_DIM}[{n} tool{'s' if n != 1 else ''}]{_TREE_RESET}"
+            extra_badges.append(f"[{n}t]")
         if msg.get("tool_call_id"):
-            badge = f" {_TREE_DIM}[tool result]{_TREE_RESET}"
+            extra_badges.append("[tr]")
 
-        index_str = f"{idx:3}"
-        line = (
-            f"  {_TREE_DIM}{index_str}{_TREE_RESET} "
-            f"{colour}{icon} {preview}{_TREE_RESET}"
-            f"{badge}"
+        bm_icon = f"{_TREE_BOLD}\033[33m★\033[0m" if idx in _cur_bookmarked() else " "
+        branch_count = len(_cur_branches().get(idx, []))
+        br_icon = (
+            f"{_TREE_CYAN}⎇{branch_count}\033[0m" if branch_count else "  "
         )
+        badge_str = f" {_TREE_DIM}{''.join(extra_badges)}{_TREE_RESET}" if extra_badges else ""
+        index_str = f"{idx:3}"
+
         if selected:
-            # Strip existing ANSI before inverting so colours don't bleed
-            line = f"{_TREE_INVERT}{_TREE_BOLD}  {index_str} {icon} {preview}{_TREE_RESET}"
+            line = (
+                f"{_TREE_INVERT}{_TREE_BOLD}"
+                f"  {index_str} {icon} {preview}"
+                f"{_TREE_RESET} {bm_icon} {br_icon}{badge_str}"
+            )
+        else:
+            line = (
+                f"  {_TREE_DIM}{index_str}{_TREE_RESET} "
+                f"{colour}{icon} {preview}{_TREE_RESET}"
+                f" {bm_icon} {br_icon}{badge_str}"
+            )
         return line + "\n"
 
     def _header() -> str:
-        n = len(messages)
+        crumbs = []
+        for i, frame in enumerate(_nav_stack):
+            s = frame["session"]
+            label = (s.name or s.id[:8])
+            if i == len(_nav_stack) - 1:
+                crumbs.append(f"{_TREE_BOLD}{_TREE_CYAN}{label}{_TREE_RESET}")
+            else:
+                crumbs.append(f"{_TREE_DIM}{label}{_TREE_RESET}")
+        breadcrumb = f" {_TREE_DIM}→{_TREE_RESET} ".join(crumbs)
+
+        n = len(_cur_msgs())
+        bm_count = len(_cur_bookmarked())
+        bm_str = f"  {_TREE_DIM}\033[33m★{bm_count}\033[0m" if bm_count else ""
+
+        cur_s = _cur_session()
+        parent_note = ""
+        if cur_s.parent_id:
+            parent_note = (
+                f"  {_TREE_DIM}⎇ forked from "
+                f"{cur_s.parent_id[:8]}@{cur_s.fork_index}{_TREE_RESET}"
+            )
+
+        keys = (
+            "↑↓ move  Enter branch  f fork  b bkm  B next  "
+            "→/← child/parent  q quit"
+        )
         return (
-            f"{_TREE_BOLD}{_TREE_CYAN}  ⎇  session tree{_TREE_RESET}"
-            f"  {_TREE_DIM}{n} message{'s' if n != 1 else ''}"
-            f"  ·  ↑↓ navigate  ·  Enter branch  ·  f fork-only  ·  Esc cancel"
-            f"{_TREE_RESET}\n"
+            f"{_TREE_BOLD}{_TREE_CYAN}  ⎇  {_TREE_RESET}{breadcrumb}"
+            f"  {_TREE_DIM}{n} msg{bm_str}{parent_note}{_TREE_RESET}\n"
+            f"{_TREE_DIM}  {keys}{_TREE_RESET}\n"
             f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
         )
 
     def _footer() -> str:
+        if mode[0] == "pick_child":
+            lines = [f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"]
+            lines.append(
+                f"  {_TREE_BOLD}Select branch to navigate into:{_TREE_RESET}\n"
+            )
+            for i, child in enumerate(pick_children):
+                label = child.name or child.id[:8]
+                age = child.updated_at[:10] if hasattr(child, "updated_at") else ""
+                sel = pick_cursor[0] == i
+                entry = f"  {'▶' if sel else ' '} [{i + 1}] {child.id[:8]}  {label}  {age}"
+                if sel:
+                    entry = f"{_TREE_INVERT}{_TREE_BOLD}{entry}{_TREE_RESET}"
+                lines.append(entry + "\n")
+            lines.append(
+                f"  {_TREE_DIM}↑↓ select  Enter/→ confirm  Esc/← cancel{_TREE_RESET}\n"
+            )
+            return "".join(lines)
+
         s = status[0]
-        if not s:
-            idx = cursor[0]
-            msg = messages[idx]
-            role = msg.get("role", "?")
-            raw = (msg.get("content") or "").replace("\n", " ").strip()
+        if s:
             return (
                 f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
-                f"  {_TREE_DIM}[{idx}] {role}  {raw[:80]}{_TREE_RESET}\n"
+                f"  {s}\n"
             )
-        return (
-            f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
-            f"  {s}\n"
-        )
+        idx = cursor[0]
+        msgs = _cur_msgs()
+        if 0 <= idx < len(msgs):
+            msg = msgs[idx]
+            role = msg.get("role", "?")
+            raw = (msg.get("content") or "").replace("\n", " ").strip()
+            bm_label = ""
+            for bm in _cur_session().bookmarks:
+                if bm["index"] == idx:
+                    bm_label = f"  \033[33m★ {bm.get('label', '')[:40]}\033[0m"
+                    break
+            branches_here = _cur_branches().get(idx, [])
+            br_info = ""
+            if branches_here:
+                names = ", ".join(b.name or b.id[:8] for b in branches_here[:3])
+                extra = f" +{len(branches_here) - 3}" if len(branches_here) > 3 else ""
+                br_info = f"  {_TREE_CYAN}⎇ {names}{extra}{_TREE_RESET}"
+            return (
+                f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
+                f"  {_TREE_DIM}[{idx}] {role}  {raw[:60]}{_TREE_RESET}"
+                f"{bm_label}{br_info}\n"
+            )
+        return f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n\n"
 
     def _build_text() -> ANSI:
         parts = [_header()]
-        for i in range(total):
+        for i in range(len(_cur_msgs())):
             parts.append(_row(i, i == cursor[0]))
         parts.append(_footer())
         return ANSI("".join(parts))
 
-    # ── key bindings ─────────────────────────────────────────────────────
+    # ── helpers ──────────────────────────────────────────────────────────
 
-    kb    = KeyBindings()
-    result: list[str | None] = [None]   # "branch" | "fork" | None (cancel)
-    app_ref: list[Application | None] = [None]
+    def _clamp() -> None:
+        total = len(_cur_msgs())
+        cursor[0] = max(0, min(total - 1, cursor[0]))
 
     def _move(delta: int) -> None:
-        cursor[0] = max(0, min(total - 1, cursor[0] + delta))
+        if mode[0] == "pick_child":
+            pick_cursor[0] = max(0, min(len(pick_children) - 1, pick_cursor[0] + delta))
+        else:
+            total = len(_cur_msgs())
+            cursor[0] = max(0, min(total - 1, cursor[0] + delta))
         status[0] = ""
         if app_ref[0]:
             app_ref[0].invalidate()
+
+    def _next_bookmark() -> None:
+        bms = sorted(_cur_bookmarked())
+        if not bms:
+            status[0] = f"{_TREE_DIM}no bookmarks — press 'b' to add{_TREE_RESET}"
+            if app_ref[0]:
+                app_ref[0].invalidate()
+            return
+        nxt = next((i for i in bms if i > cursor[0]), bms[0])
+        cursor[0] = nxt
+        status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _toggle_bookmark() -> None:
+        idx = cursor[0]
+        msgs = _cur_msgs()
+        if idx < 0 or idx >= len(msgs):
+            return
+        added = sm.toggle_bookmark(_cur_session(), idx)
+        _frame()["bookmarked"] = {b["index"] for b in _cur_session().bookmarks}
+        action = f"\033[33m★\033[0m bookmarked [{idx}]" if added else f"removed bookmark [{idx}]"
+        status[0] = action
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _navigate_into() -> None:
+        idx = cursor[0]
+        children = _cur_branches().get(idx, [])
+        if not children:
+            status[0] = f"{_TREE_DIM}no branches at [{idx}] — press 'f' to fork here{_TREE_RESET}"
+            if app_ref[0]:
+                app_ref[0].invalidate()
+            return
+        if len(children) == 1:
+            _push_child(children[0])
+        else:
+            pick_children.clear()
+            pick_children.extend(children)
+            pick_cursor[0] = 0
+            mode[0] = "pick_child"
+            if app_ref[0]:
+                app_ref[0].invalidate()
+
+    def _push_child(child_meta: "object") -> None:
+        try:
+            child_session = sm.load(child_meta.id)
+            frame = _load_frame(child_session)
+            _nav_stack.append(frame)
+            cursor[0] = len(child_session.messages) - 1
+            status[0] = ""
+        except Exception as exc:
+            status[0] = f"{_TREE_RED}✗ could not load {child_meta.id[:8]}: {exc}{_TREE_RESET}"
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _navigate_back() -> None:
+        if len(_nav_stack) <= 1:
+            status[0] = f"{_TREE_DIM}already at root{_TREE_RESET}"
+            if app_ref[0]:
+                app_ref[0].invalidate()
+            return
+        _nav_stack.pop()
+        _clamp()
+        status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _confirm_pick() -> None:
+        if not pick_children:
+            return
+        child_meta = pick_children[pick_cursor[0]]
+        mode[0] = "list"
+        _push_child(child_meta)
+
+    # ── key bindings ─────────────────────────────────────────────────────
+
+    kb = KeyBindings()
 
     @kb.add("up")
     @kb.add("k")
@@ -709,38 +908,79 @@ def _tree_navigator(agent: "Agent", output_fn: "Callable[[str], None]") -> None:
     @kb.add("home")
     @kb.add("g")
     def _home(_: object) -> None:
-        cursor[0] = 0
-        status[0] = ""
-        if app_ref[0]:
-            app_ref[0].invalidate()
+        if mode[0] == "list":
+            cursor[0] = 0
+            status[0] = ""
+            if app_ref[0]:
+                app_ref[0].invalidate()
 
     @kb.add("end")
     @kb.add("G")
     def _end(_: object) -> None:
-        cursor[0] = total - 1
-        status[0] = ""
-        if app_ref[0]:
-            app_ref[0].invalidate()
+        if mode[0] == "list":
+            cursor[0] = len(_cur_msgs()) - 1
+            status[0] = ""
+            if app_ref[0]:
+                app_ref[0].invalidate()
 
     @kb.add("enter")
-    def _branch(_: object) -> None:
+    def _enter(_: object) -> None:
+        if mode[0] == "pick_child":
+            _confirm_pick()
+            return
         result[0] = "branch"
         if app_ref[0]:
             app_ref[0].exit()
 
     @kb.add("f")
-    def _fork_only(_: object) -> None:
-        result[0] = "fork"
-        if app_ref[0]:
-            app_ref[0].exit()
+    def _fork_key(_: object) -> None:
+        if mode[0] == "list":
+            result[0] = "fork"
+            if app_ref[0]:
+                app_ref[0].exit()
+
+    @kb.add("b")
+    def _bkm(_: object) -> None:
+        if mode[0] == "list":
+            _toggle_bookmark()
+
+    @kb.add("B")
+    def _next_bkm(_: object) -> None:
+        if mode[0] == "list":
+            _next_bookmark()
+
+    @kb.add("right")
+    @kb.add("l")
+    def _right(_: object) -> None:
+        if mode[0] == "list":
+            _navigate_into()
+        elif mode[0] == "pick_child":
+            _confirm_pick()
+
+    @kb.add("left")
+    @kb.add("h")
+    def _left(_: object) -> None:
+        if mode[0] == "pick_child":
+            mode[0] = "list"
+            status[0] = ""
+            if app_ref[0]:
+                app_ref[0].invalidate()
+        else:
+            _navigate_back()
 
     @kb.add("escape")
     @kb.add("q")
     @kb.add("c-c")
     def _cancel(_: object) -> None:
-        result[0] = None
-        if app_ref[0]:
-            app_ref[0].exit()
+        if mode[0] == "pick_child":
+            mode[0] = "list"
+            status[0] = ""
+            if app_ref[0]:
+                app_ref[0].invalidate()
+        else:
+            result[0] = None
+            if app_ref[0]:
+                app_ref[0].exit()
 
     # ── layout ───────────────────────────────────────────────────────────
 
@@ -761,23 +1001,12 @@ def _tree_navigator(agent: "Agent", output_fn: "Callable[[str], None]") -> None:
     )
     app_ref[0] = app
 
-    # ── run ──────────────────────────────────────────────────────────────
-    # _tree_navigator is called from a *synchronous* key-binding handler
-    # (prompt_toolkit's _call_handler never awaits its handlers).
-    # The outer REPL Application owns the running asyncio event loop on the
-    # main thread, so we cannot call asyncio.run() or loop.run_until_complete()
-    # here — both raise "cannot be called from a running event loop".
-    #
-    # Solution: spin up a dedicated daemon thread with its own fresh event
-    # loop, run the tree Application there, and block the main thread with a
-    # threading.Event until the tree app exits.  The tree app renders to the
-    # same terminal fd — prompt_toolkit handles that correctly as long as only
-    # one Application is drawing at a time (the outer REPL is blocked/idle
-    # while we wait on the Event).
+    # ── run in a dedicated thread (avoids conflicting event loops) ───────
+
     import threading as _threading
 
     _done = _threading.Event()
-    _exc: list[BaseException] = []
+    _exc: "list[BaseException]" = []
 
     def _run_in_thread() -> None:
         import asyncio as _asyncio
@@ -793,7 +1022,18 @@ def _tree_navigator(agent: "Agent", output_fn: "Callable[[str], None]") -> None:
 
     t = _threading.Thread(target=_run_in_thread, daemon=True)
     t.start()
-    _done.wait()   # block the main thread (key-binding handler) until tree exits
+    _done.wait()
+
+    # The tree App ran full_screen in a background thread and exited the
+    # alternate screen buffer.  Tell the outer REPL renderer to treat the
+    # terminal as "unknown state" so the next paint re-enters the alternate
+    # screen and does a full erase+redraw — the same thing that happens on
+    # resize, which is why resize previously "fixed" the display.
+    if reset_fn:
+        try:
+            reset_fn()
+        except Exception:
+            pass
 
     if _exc:
         output_fn(f"  \033[31m✗ /tree error: {_exc[0]}\033[0m\n")
@@ -802,15 +1042,19 @@ def _tree_navigator(agent: "Agent", output_fn: "Callable[[str], None]") -> None:
     # ── act on the user's choice ─────────────────────────────────────────
 
     chosen_idx = cursor[0]
-    action     = result[0]
+    action = result[0]
 
     if action is None:
         output_fn(f"  {_TREE_DIM}/tree cancelled{_TREE_RESET}\n")
         return
 
-    # Always persist a fork so the old history is safe
-    sm     = agent._session_manager
-    forked = sm.fork(agent._session.id, chosen_idx)
+    # Fork from whichever session was active at exit (top of nav stack)
+    target_session = _cur_session()
+    if chosen_idx >= len(target_session.messages):
+        output_fn(f"  {_TREE_RED}✗ invalid index {chosen_idx}{_TREE_RESET}\n")
+        return
+
+    forked = sm.fork(target_session.id, chosen_idx)
 
     if action == "fork":
         output_fn(
@@ -820,20 +1064,16 @@ def _tree_navigator(agent: "Agent", output_fn: "Callable[[str], None]") -> None:
         )
         return
 
-    # action == "branch": replace live context with the snapshot
-    snapshot = agent._session.snapshot_at(chosen_idx)
+    # action == "branch": restore agent context to the forked state
+    snapshot = target_session.snapshot_at(chosen_idx)
     agent._context.restore(snapshot)
-
-    # Reset compactor overflow flag so the new (smaller) context is clean
     agent._context.compactor.reset_overflow_flag()
-
-    # Update the live session to point at the fork
     agent._session = forked
 
     output_fn(
         f"  {_TREE_GREEN}⎇  branched{_TREE_RESET}"
-        f"  {_TREE_DIM}context rolled back to message [{chosen_idx}]"
-        f"  —  old history saved as {forked.id[:8]}{_TREE_RESET}\n"
+        f"  {_TREE_DIM}context rolled back to [{chosen_idx}]"
+        f"  from {target_session.id[:8]} → {forked.id[:8]}{_TREE_RESET}\n"
     )
 
 
@@ -849,6 +1089,7 @@ def _handle_slash(
     agent: "Agent | None" = None,
     output_fn: Callable[[str], None] | None = None,
     staged_images: list[str] | None = None,
+    reset_fn: "Callable[[], None] | None" = None,
 ) -> bool:
     from typing import Any
 
@@ -976,6 +1217,68 @@ def _handle_slash(
                 ("  →  ", Style(dim=True)),
                 (arg, Style(color="cyan", bold=True)),
             ))
+        return True
+
+    if keyword == "/fork":
+        if agent is None:
+            _print("[dim]  /fork requires an active session.[/dim]")
+            return True
+        fork_name = arg or None
+        sm = agent._session_manager
+        msgs = [
+            m.to_dict() if hasattr(m, "to_dict") else {"role": m.role, "content": m.content}
+            for m in agent._context.get_messages()
+        ]
+        agent._session.messages = msgs
+        sm.save(agent._session)
+        idx = len(agent._session.messages) - 1
+        if idx < 0:
+            _print("[dim]  No messages to fork from.[/dim]")
+            return True
+        try:
+            forked = sm.fork(agent._session.id, idx, name=fork_name)
+            _print(Text.assemble(
+                ("  ✓ forked  ", Style(color="green", bold=True)),
+                (forked.id[:8], Style(color="cyan")),
+                (f"  '{forked.name}'", Style(color="cyan", bold=True)),
+                (f"  ({len(forked.messages)} msgs — live context unchanged)", Style(dim=True)),
+            ))
+        except Exception as exc:
+            _print(f"[red]  ✗ fork failed: {exc}[/red]")
+        return True
+
+    if keyword == "/bookmark":
+        if agent is None:
+            _print("[dim]  /bookmark requires an active session.[/dim]")
+            return True
+        sm = agent._session_manager
+        if not arg:
+            # List all bookmarks
+            bms = agent._session.bookmarks
+            if not bms:
+                _print("[dim]  No bookmarks. In /tree press 'b' to add, or: /bookmark <index> [label][/dim]")
+            else:
+                lines = [f"[bold]Bookmarks ({len(bms)}):[/bold]"]
+                for bm in sorted(bms, key=lambda b: b["index"]):
+                    lines.append(
+                        f"  [cyan]{bm['index']:4}[/cyan]  [dim]{bm.get('label', '')[:70]}[/dim]"
+                    )
+                _print("\n".join(lines))
+        else:
+            bm_parts = arg.split(None, 1)
+            try:
+                idx = int(bm_parts[0])
+                label = bm_parts[1] if len(bm_parts) > 1 else ""
+                added = sm.toggle_bookmark(agent._session, idx, label)
+                if added:
+                    _print(Text.assemble(
+                        ("  ★ bookmarked  ", Style(color="yellow", bold=True)),
+                        (f"[{idx}]", Style(color="cyan")),
+                    ))
+                else:
+                    _print(f"[dim]  removed bookmark [{idx}][/dim]")
+            except ValueError:
+                _print("[dim]  Usage: /bookmark <index> [label][/dim]")
         return True
 
     if keyword == "/copy":
@@ -1174,7 +1477,7 @@ def _handle_slash(
         if output_fn is None:
             _print("[dim]  /tree is only available inside the interactive REPL.[/dim]")
             return True
-        _tree_navigator(agent, output_fn)
+        _tree_navigator(agent, output_fn, reset_fn=reset_fn)
         return True
 
     if keyword == "/prompts":
@@ -1518,8 +1821,16 @@ def _repl(
 
         # slash commands
         if text.startswith("/") and steering is not None:
+            def _tree_reset_fn() -> None:
+                _a = app_ref[0]
+                if _a is not None:
+                    try:
+                        _a.renderer.reset()
+                    except Exception:
+                        pass
             handled = _handle_slash(
-                text, steering, ext_registry, ext_context, agent=agent, output_fn=_append_output, staged_images=_staged_images
+                text, steering, ext_registry, ext_context, agent=agent, output_fn=_append_output,
+                staged_images=_staged_images, reset_fn=_tree_reset_fn,
             )
             if handled is True:
                 return

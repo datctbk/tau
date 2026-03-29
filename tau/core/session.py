@@ -62,6 +62,8 @@ class Session:
             "cache_write_tokens": 0
         }
     )
+    bookmarks: list[dict] = field(default_factory=list)
+    # Each bookmark: {"index": int, "label": str}
 
     @property
     def meta(self) -> SessionMeta:
@@ -96,6 +98,7 @@ class Session:
             "parent_id": self.parent_id,
             "fork_index": self.fork_index,
             "cumulative_usage": self.cumulative_usage,
+            "bookmarks": self.bookmarks,
         }
 
     @classmethod
@@ -123,6 +126,7 @@ class Session:
             cumulative_usage=d.get("cumulative_usage", {
                 "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0
             }),
+            bookmarks=d.get("bookmarks", []),
         )
 
     def snapshot_at(self, index: int) -> list[dict[str, Any]]:
@@ -329,3 +333,28 @@ class SessionManager:
             except Exception:  # noqa: BLE001
                 pass
         return sorted(branches, key=lambda m: m.created_at)
+
+    def toggle_bookmark(
+        self,
+        session: Session,
+        index: int,
+        label: str = "",
+    ) -> bool:
+        """Toggle a bookmark at *index* in *session*.
+
+        Returns ``True`` if the bookmark was added, ``False`` if it was removed.
+        The session is saved to disk after the change.
+        """
+        existing = next((b for b in session.bookmarks if b["index"] == index), None)
+        if existing:
+            session.bookmarks.remove(existing)
+            self.save(session)
+            return False
+        if not label and index < len(session.messages):
+            msg = session.messages[index]
+            raw = (msg.get("content") or "").replace("\n", " ").strip()
+            label = raw[:60]
+        session.bookmarks.append({"index": index, "label": label})
+        session.bookmarks.sort(key=lambda b: b["index"])
+        self.save(session)
+        return True

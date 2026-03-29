@@ -130,7 +130,7 @@ def complete_slash_commands(
 # Builtin slash command names (matches _SLASH_HELP in cli.py)
 BUILTIN_SLASH_COMMANDS = [
     "help", "queue", "steer", "clear", "compact",
-    "model", "think", "tokens", "tree", "image",
+    "model", "think", "tokens", "tree", "fork", "bookmark", "image",
     "copy", "export", "reload", "prompt", "prompts",
 ]
 
