@@ -2014,10 +2014,10 @@ def main() -> None:
 # `tau run`
 # ---------------------------------------------------------------------------
 @main.command("run")
-@click.argument("prompt", required=False)
+@click.argument("args", nargs=-1, required=False)
 @_agent_options
 def run_cmd(
-    prompt: str | None,
+    args: tuple[str, ...],
     provider: str | None,
     model: str | None,
     think: str | None,
@@ -2039,6 +2039,15 @@ def run_cmd(
     trace_log: str | None,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
+    # Split args into @file tokens and plain text tokens.
+    # e.g. `tau run @code.py @tests.py "review these"` →
+    #      file_args=["@code.py", "@tests.py"], prompt="review these"
+    file_args = [a for a in args if a.startswith("@")]
+    text_args  = [a for a in args if not a.startswith("@")]
+    prompt: str | None = " ".join(text_args) if text_args else None
+    if file_args:
+        file_str = " ".join(file_args)
+        prompt = (file_str + "\n\n" + prompt) if prompt else file_str
     # Resolve output mode: --print flag takes precedence as shorthand
     mode = output_mode
     if print_mode:
