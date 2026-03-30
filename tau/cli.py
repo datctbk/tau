@@ -313,31 +313,37 @@ def _render_events(
     import threading as _thr
     _SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _spin_stop = _thr.Event()
-    _first_output = [False]  # flipped True once any visible output arrives
+    _spin_msg = ["thinking..."]
+    _spin_running = [False]
 
     def _spin_loop() -> None:
         idx = 0
         while not _spin_stop.is_set():
-            if _first_output[0]:
-                return
-            sys.stdout.write(f"\r  {_SPIN[idx % len(_SPIN)]} thinking...")
+            sys.stdout.write(f"\r  {_SPIN[idx % len(_SPIN)]} {_spin_msg[0]}")
             sys.stdout.flush()
             idx += 1
             _spin_stop.wait(0.08)
         # clear spinner line
-        sys.stdout.write("\r" + " " * 20 + "\r")
+        sys.stdout.write("\r" + " " * 30 + "\r")
         sys.stdout.flush()
+        _spin_running[0] = False
 
-    if output_fn is None:
-        _spin_thread = _thr.Thread(target=_spin_loop, daemon=True)
-        _spin_thread.start()
+    def _start_spinner(msg: str = "thinking...") -> None:
+        if output_fn is not None:
+            return
+        _spin_stop.clear()
+        _spin_msg[0] = msg
+        _spin_running[0] = True
+        t = _thr.Thread(target=_spin_loop, daemon=True)
+        t.start()
+
+    _start_spinner("thinking...")
 
     def _stop_spinner() -> None:
-        if not _first_output[0]:
-            _first_output[0] = True
+        if _spin_running[0]:
             _spin_stop.set()
             if output_fn is None:
-                sys.stdout.write("\r" + " " * 20 + "\r")
+                sys.stdout.write("\r" + " " * 30 + "\r")
                 sys.stdout.flush()
 
     for event in agent.run(user_input, images=images):
@@ -393,6 +399,7 @@ def _render_events(
                     (event.call.name, Style(color=theme.accent_color, bold=True)),
                     (f"({args_display})", Style(color="white", dim=True)),
                 ))
+            _start_spinner("running...")
         elif isinstance(event, ToolResultEvent):
             _stop_spinner()
             r = event.result

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from collections.abc import Generator
 from typing import Any
@@ -74,6 +75,8 @@ class OllamaProvider:
         content_parts: list[str] = []
         tool_calls_raw: list[dict] = []
         final_data: dict[str, Any] = {}
+        buffer = ""
+        in_tool_call = False
 
         with self._client.stream("POST", f"{self._base_url}/api/chat", json=payload) as resp:
             resp.raise_for_status()
@@ -95,14 +98,49 @@ class OllamaProvider:
                 if thinking:
                     yield TextDelta(text=thinking, is_thinking=True)  # type: ignore[misc]
 
-                # Visible content
+                # Visible content — suppress <tool_call> blocks from display
                 delta = msg.get("content", "")
                 if delta:
-                    content_parts.append(delta)
-                    yield TextDelta(text=delta)  # type: ignore[misc]
+                    buffer += delta
+
+                    # Drain normal content before any <tool_call> opening tag
+                    while True:
+                        if in_tool_call:
+                            if "</tool_call>" in buffer:
+                                _, _, buffer = buffer.partition("</tool_call>")
+                                in_tool_call = False
+                            else:
+                                break  # still accumulating inside tag
+                        else:
+                            if "<tool_call>" in buffer:
+                                before, _, after = buffer.partition("<tool_call>")
+                                if before:
+                                    content_parts.append(before)
+                                    yield TextDelta(text=before)  # type: ignore[misc]
+                                buffer = "<tool_call>" + after
+                                in_tool_call = True
+                            else:
+                                # Emit everything except a possible partial opening tag
+                                safe, _, partial = buffer.rpartition("\n")
+                                emit = (safe + "\n") if safe else ""
+                                # Hold back content that might be start of <tool_call>
+                                if "<" in partial:
+                                    emit += ""
+                                    buffer = partial
+                                else:
+                                    emit += partial
+                                    buffer = ""
+                                if emit:
+                                    content_parts.append(emit)
+                                    yield TextDelta(text=emit)  # type: ignore[misc]
+                                break
 
                 if chunk.get("done"):
                     final_data = chunk
+
+        # Flush remaining non-tool-call buffer
+        if buffer and not in_tool_call:
+            content_parts.append(buffer)
 
         final_data.setdefault("message", {})
         final_data["message"]["content"] = "".join(content_parts)
@@ -135,12 +173,21 @@ def _parse_ollama_response(data: dict[str, Any]) -> ProviderResponse:
     if tool_calls:
         stop_reason = "tool_use"
 
+    # Fallback: parse <tool_call> blocks from text content when native
+    # tool_calls were not returned (models that emit XML in plain text).
+    content_text = msg.get("content") or ""
+    if not tool_calls and content_text:
+        tool_calls = _parse_tool_calls(content_text)
+        if tool_calls:
+            stop_reason = "tool_use"
+            content_text = _strip_tool_call_blocks(content_text)
+
     usage = TokenUsage(
         input_tokens=data.get("prompt_eval_count", 0),
         output_tokens=data.get("eval_count", 0),
     )
     return ProviderResponse(
-        content=msg.get("content") or None,
+        content=content_text or None,
         tool_calls=tool_calls,
         stop_reason=stop_reason,
         usage=usage,
@@ -189,3 +236,41 @@ def _to_ollama_tool(t: ToolDefinition) -> dict[str, Any]:
             "parameters": t.to_json_schema(),
         },
     }
+
+
+def _try_load_tool_json(raw: str) -> dict | None:
+    """Try to parse a JSON object, trimming to the last '}' if needed."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        idx = raw.rfind("}")
+        if idx != -1:
+            try:
+                return json.loads(raw[: idx + 1])
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+def _parse_tool_calls(text: str) -> list[ToolCall]:
+    """Extract tool calls from <tool_call>…</tool_call> blocks in plain text."""
+    calls: list[ToolCall] = []
+    for match in re.finditer(r"<tool_call>\s*(\{.*?)\s*</tool_call>", text, re.DOTALL):
+        raw = match.group(1).strip()
+        data = _try_load_tool_json(raw)
+        if data is None:
+            continue
+        try:
+            calls.append(ToolCall(
+                id=str(uuid.uuid4()),
+                name=data["name"],
+                arguments=data.get("arguments", {}),
+            ))
+        except KeyError:
+            continue
+    return calls
+
+
+def _strip_tool_call_blocks(text: str) -> str:
+    """Remove all <tool_call>…</tool_call> blocks from text."""
+    return re.sub(r"<tool_call>.*?</tool_call>\s*", "", text, flags=re.DOTALL).strip()

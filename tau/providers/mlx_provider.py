@@ -323,9 +323,8 @@ def _parse_tool_calls(text: str) -> list[ToolCall]:
     calls: list[ToolCall] = []
 
     # Pattern 1: <tool_call> blocks
-    # Use (\{.*) without requiring closing } to handle truncated model output
     for match in re.finditer(
-        r"<tool_call>\s*(\{.*)\s*</tool_call>", text, re.DOTALL
+        r"<tool_call>\s*(\{.*?)\s*</tool_call>", text, re.DOTALL
     ):
         raw = match.group(1).strip()
         data = _try_load_tool_json(raw)
