@@ -7,4 +7,4 @@ tau/skills/__pycache__/
 tau/tools/__pycache__/
 tests/__pycache__/
 llm_trace.log
-llm_trace.log
+.tau/sessions/

@@ -547,6 +547,9 @@ _SLASH_HELP = (
     "  /bookmark <i> [label]  toggle bookmark at message index i\n"
     "  /copy          copy last assistant message to clipboard\n"
     "  /export [file]  export session as JSON (or .md for markdown)\n"
+    "  /share [--json]  upload session to paste.rs and print the URL\n"
+    "  /import <file>  import a previously-exported JSON session file\n"
+
     "  /reload        hot-reload config, extensions, skills, context files\n"
     "  /prompt <name> [k=v …]  expand a prompt template and send it\n"
     "  /prompts       list available prompt templates\n"
@@ -1335,7 +1338,14 @@ def _handle_slash(
         else:
             content = json.dumps(session.to_dict(), indent=2)
         if arg:
-            out_path = Path(arg).resolve()
+            _arg_path = Path(arg)
+            if _arg_path.is_absolute() or len(_arg_path.parts) > 1:
+                out_path = _arg_path.resolve()
+            else:
+                from tau.core.session import local_sessions_dir
+                _sessions = local_sessions_dir(agent._config.workspace_root)
+                _sessions.mkdir(parents=True, exist_ok=True)
+                out_path = _sessions / _arg_path
             out_path.write_text(content, encoding="utf-8")
             _print(Text.assemble(
                 ("  \u2713 ", Style(color="green", bold=True)),
@@ -1347,7 +1357,90 @@ def _handle_slash(
             _print(content)
         return True
 
+    if keyword == "/import":
+        if not arg:
+            _print("[dim]  Usage: /import <path-to-session.json>[/dim]")
+            return True
+        _arg_src = Path(arg).expanduser()
+        if _arg_src.is_absolute() or len(_arg_src.parts) > 1:
+            src = _arg_src.resolve()
+        else:
+            from tau.core.session import local_sessions_dir
+            _src_sessions = local_sessions_dir(agent._config.workspace_root if agent else ".")
+            src = (_src_sessions / _arg_src).resolve()
+            if not src.exists():
+                # fall back to CWD
+                src = _arg_src.resolve()
+        if not src.exists():
+            _print(f"[red]  ✗ file not found: {src}[/red]")
+            return True
+        try:
+            data = json.loads(src.read_text(encoding="utf-8"))
+        except Exception as exc:
+            _print(f"[red]  ✗ could not parse JSON: {exc}[/red]")
+            return True
+        try:
+            import uuid as _uuid
+            from tau.core.session import Session as _Session
+            session_obj = _Session.from_dict(data)
+            # Assign a fresh ID to avoid colliding with an existing session
+            session_obj.id = str(_uuid.uuid4())
+            from tau.core.session import local_sessions_dir
+            _imp_sessions = local_sessions_dir(agent._config.workspace_root if agent else ".")
+            _imp_sessions.mkdir(parents=True, exist_ok=True)
+            sm = SessionManager(sessions_dir=_imp_sessions)
+            sm.save(session_obj)
+            _print(Text.assemble(
+                ("  ✓ imported: ", Style(color="green", bold=True)),
+                (session_obj.id[:8], Style(color="cyan", bold=True)),
+                (f"  {session_obj.name or '(unnamed)'}  ({len(session_obj.messages)} messages)",
+                 Style(dim=True)),
+                ("\n    resume with: ", Style(dim=True)),
+                (f"tau run -s {session_obj.id[:8]}", Style(color="cyan")),
+            ))
+        except Exception as exc:
+            _print(f"[red]  ✗ import failed: {exc}[/red]")
+        return True
+
+    if keyword == "/share":
+        if agent is None:
+            _print("[dim]  /share requires an active session.[/dim]")
+            return True
+        session = agent._session
+        # Sync live context messages into session before sharing
+        session.messages = [
+            m.to_dict() if hasattr(m, "to_dict") else (
+                {"role": m.role, "content": m.content} if hasattr(m, "role") else m
+            )
+            for m in agent._context.get_messages()
+        ]
+        fmt = "json" if arg == "--json" else "markdown"
+        _print("[dim]  ↑ uploading session…[/dim]")
+        try:
+            from tau.core.session import share_session
+            url = share_session(session, fmt=fmt)
+            _print(Text.assemble(
+                ("  ✓ shared: ", Style(color="green", bold=True)),
+                (url, Style(color="cyan", underline=True)),
+                (f"  ({len(session.messages)} messages, {fmt})", Style(dim=True)),
+            ))
+            # Copy URL to clipboard (best-effort; silent on failure)
+            import subprocess as _sp
+            import sys as _sys
+            try:
+                if _sys.platform == "darwin":
+                    _sp.run(["pbcopy"], input=url, text=True, check=False, timeout=3)
+                elif _sys.platform.startswith("linux"):
+                    _sp.run(["xclip", "-selection", "clipboard"], input=url,
+                            text=True, check=False, timeout=3)
+            except Exception:
+                pass
+        except Exception as exc:
+            _print(f"[red]  ✗ share failed: {exc}[/red]")
+        return True
+
     if keyword == "/reload":
+
         if agent is None:
             _print("[dim]  /reload requires an active session.[/dim]")
             return True
@@ -2098,8 +2191,10 @@ def run_cmd(
         from tau.sdk import InMemorySessionManager
         session_manager = InMemorySessionManager()
     else:
-        session_manager = SessionManager()
+        from tau.core.session import local_sessions_dir
+        session_manager = SessionManager(sessions_dir=local_sessions_dir(workspace))
     steering = SteeringChannel()
+
 
     # Non-interactive modes disable shell confirmation
     confirm_hook = None
@@ -2156,12 +2251,17 @@ def sessions_group() -> None:
     """Manage saved sessions."""
 
 @sessions_group.command("list")
-def sessions_list() -> None:
-    sm = SessionManager()
+@click.option("--workspace", "-w", default=".", show_default=True, help="Project workspace root.")
+def sessions_list(workspace: str) -> None:
+    """List sessions in the current project workspace."""
+    from tau.core.session import local_sessions_dir
+    sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
     metas = sm.list_sessions()
+    sdir = local_sessions_dir(workspace)
     if not metas:
-        console.print("[dim]No sessions found.[/dim]")
+        console.print(f"[dim]No sessions found in {sdir}[/dim]")
         return
+    console.print(f"[dim]Sessions in {sdir}:[/dim]")
     console.print(f"[bold]{'ID':10} {'NAME':24} {'MODEL':22} {'UPDATED':19}[/bold]")
     console.print(Rule(style="dim"))
     for m in metas:
@@ -2169,8 +2269,11 @@ def sessions_list() -> None:
 
 @sessions_group.command("show")
 @click.argument("session_id")
-def sessions_show(session_id: str) -> None:
-    sm = SessionManager()
+@click.option("--workspace", "-w", default=".", show_default=True, help="Project workspace root.")
+def sessions_show(session_id: str, workspace: str) -> None:
+    """Show details and messages for a session."""
+    from tau.core.session import local_sessions_dir
+    sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
     try:
         session = sm.load(session_id)
     except Exception as exc:
@@ -2194,8 +2297,11 @@ def sessions_show(session_id: str) -> None:
 @sessions_group.command("delete")
 @click.argument("session_id")
 @click.option("--yes", "-y", is_flag=True, default=False)
-def sessions_delete(session_id: str, yes: bool) -> None:
-    sm = SessionManager()
+@click.option("--workspace", "-w", default=".", show_default=True, help="Project workspace root.")
+def sessions_delete(session_id: str, yes: bool, workspace: str) -> None:
+    """Delete a session from the project workspace."""
+    from tau.core.session import local_sessions_dir
+    sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
     if not yes:
         click.confirm(f"Delete session {session_id!r}?", abort=True)
     try:
@@ -2219,8 +2325,10 @@ def sessions_fork(
     template_name: str | None, var: tuple[str, ...],
     max_cost: float | None, no_session: bool,
 ) -> None:
-    sm = SessionManager()
+    from tau.core.session import local_sessions_dir
+    sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
     try:
+
         forked = sm.fork(session_id, message_index, name=name)
     except Exception as exc:
         err_console.print(f"[red]Error:[/red] {exc}")
@@ -2247,8 +2355,11 @@ def sessions_fork(
 
 @sessions_group.command("branches")
 @click.argument("session_id")
-def sessions_branches(session_id: str) -> None:
-    sm = SessionManager()
+@click.option("--workspace", "-w", default=".", show_default=True, help="Project workspace root.")
+def sessions_branches(session_id: str, workspace: str) -> None:
+    """List all sessions forked from a given session."""
+    from tau.core.session import local_sessions_dir
+    sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
     branches = sm.list_branches(session_id)
     if not branches:
         console.print(f"[dim]No branches found for session {session_id[:8]}.[/dim]")
@@ -2260,8 +2371,11 @@ def sessions_branches(session_id: str) -> None:
 
 @sessions_group.command("fork-points")
 @click.argument("session_id")
-def sessions_fork_points(session_id: str) -> None:
-    sm = SessionManager()
+@click.option("--workspace", "-w", default=".", show_default=True, help="Project workspace root.")
+def sessions_fork_points(session_id: str, workspace: str) -> None:
+    """List fork points (user messages) in a session."""
+    from tau.core.session import local_sessions_dir
+    sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
     try:
         points = sm.get_fork_points(session_id)
     except Exception as exc:
@@ -2278,13 +2392,86 @@ def sessions_fork_points(session_id: str) -> None:
             (fp.content, Style(dim=True)),
         ))
 
+@sessions_group.command("import")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False, readable=True))
+@click.option("--resume", "-r", is_flag=True, default=False, help="Start REPL in the imported session immediately.")
+@_agent_options
+def sessions_import(
+    file: str,
+    resume: bool,
+    provider: str | None,
+    model: str | None,
+    think: str | None,
+    image: tuple[str, ...],
+    resume_id: str | None,
+    session_name: str | None,
+    no_confirm: bool,
+    no_parallel: bool,
+    persistent_shell: bool,
+    workspace: str,
+    verbose: bool,
+    show_thinking: bool,
+    output_mode: str | None,
+    print_mode: bool,
+    template_name: str | None,
+    var: tuple[str, ...],
+    max_cost: float | None,
+    no_session: bool,
+    trace_log: str | None,
+) -> None:
+    """Import a previously-exported JSON session file."""
+    import uuid
+    from tau.core.session import Session
+    src = Path(file).resolve()
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+    except Exception as exc:
+        err_console.print(f"[red]Error reading file:[/red] {exc}")
+        sys.exit(1)
+    try:
+        session_obj = Session.from_dict(data)
+    except Exception as exc:
+        err_console.print(f"[red]Error parsing session JSON:[/red] {exc}")
+        sys.exit(1)
+    # Fresh ID to avoid collision with any existing session
+    session_obj.id = str(uuid.uuid4())
+    from tau.core.session import local_sessions_dir
+    sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
+    sm.save(session_obj)
+    sdir = local_sessions_dir(workspace)
+    console.print(Text.assemble(
+        ("  ✓ imported: ", Style(color="green", bold=True)),
+        (session_obj.id[:8], Style(color="cyan", bold=True)),
+        (f"  {session_obj.name or '(unnamed)'}  ({len(session_obj.messages)} messages)",
+         Style(dim=True)),
+    ))
+    console.print(f"[dim]  Saved to: {sdir}[/dim]")
+    console.print(f"[dim]  Resume: [cyan]tau run -s {session_obj.id[:8]} -w {workspace}[/cyan][/dim]")
+    if resume:
+        _setup_logging(verbose)
+        ensure_tau_home()
+        tau_config = load_config()
+        agent_config = _make_agent_config(
+            tau_config, provider, model, think, no_confirm, workspace, no_parallel,
+            persistent_shell, max_cost=max_cost,
+        )
+        steering = SteeringChannel()
+        agent, ext_reg = _build_agent(
+            tau_config=tau_config, agent_config=agent_config,
+            session_manager=sm, session_name=None, resume_id=session_obj.id,
+            steering=steering,
+        )
+        _repl(agent, agent_config, verbose, ext_registry=ext_reg)
+
 @sessions_group.command("export")
 @click.argument("session_id")
 @click.option("--format", "-f", "fmt", type=click.Choice(["json", "markdown"]), default="json", help="Export format.")
 @click.option("--output", "-o", "output_file", default=None, help="Write to file instead of stdout.")
-def sessions_export(session_id: str, fmt: str, output_file: str | None) -> None:
+@click.option("--workspace", "-w", default=".", show_default=True, help="Project workspace root.")
+def sessions_export(session_id: str, fmt: str, output_file: str | None, workspace: str) -> None:
     """Export a session as JSON or Markdown."""
-    sm = SessionManager()
+    from tau.core.session import local_sessions_dir
+    sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
     try:
         session = sm.load(session_id)
     except Exception as exc:

@@ -18,6 +18,18 @@ TAU_HOME = Path.home() / ".tau"
 SESSIONS_DIR = TAU_HOME / "sessions"
 
 
+def local_sessions_dir(workspace_root: str | Path) -> Path:
+    """Return the project-local session directory: <workspace>/.tau/sessions/.
+
+    This is the preferred location for sessions when running inside a project.
+    Falls back to the global SESSIONS_DIR if workspace_root is not set.
+    """
+    ws = Path(workspace_root).resolve() if workspace_root else None
+    if ws:
+        return ws / ".tau" / "sessions"
+    return SESSIONS_DIR
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -187,7 +199,40 @@ def export_session_markdown(session: Session) -> str:
     return "\n".join(lines)
 
 
+def share_session(session: "Session", fmt: str = "markdown") -> str:
+    """Upload session to paste.rs and return the public URL.
+
+    Args:
+        session: The session to upload.
+        fmt: ``"markdown"`` (default) or ``"json"``.
+
+    Returns:
+        The public URL where the paste can be viewed.
+
+    Raises:
+        urllib.error.URLError: if the upload fails.
+    """
+    import urllib.request
+
+    content = (
+        export_session_markdown(session)
+        if fmt == "markdown"
+        else json.dumps(session.to_dict(), indent=2)
+    )
+    data = content.encode("utf-8")
+    req = urllib.request.Request(
+        "https://paste.rs",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "text/plain; charset=utf-8"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        url = resp.read().decode("utf-8").strip()
+    return url
+
+
 class SessionManager:
+
     def __init__(self, sessions_dir: Path = SESSIONS_DIR) -> None:
         self._dir = sessions_dir
         self._dir.mkdir(parents=True, exist_ok=True)

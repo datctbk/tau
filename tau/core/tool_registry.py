@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any
 
@@ -68,7 +69,21 @@ class ToolRegistry:
 
         logger.debug("Dispatching tool %r with args %s", call.name, call.arguments)
         try:
-            raw: Any = tool.handler(**call.arguments)
+            sig = inspect.signature(tool.handler)
+            params = sig.parameters
+            accepts_var_keyword = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
+            if accepts_var_keyword:
+                filtered = call.arguments
+            else:
+                filtered = {k: v for k, v in call.arguments.items() if k in params}
+                dropped = set(call.arguments) - set(filtered)
+                if dropped:
+                    logger.warning(
+                        "Tool %r: ignoring unexpected argument(s): %s", call.name, dropped
+                    )
+            raw: Any = tool.handler(**filtered)
             content = raw if isinstance(raw, str) else str(raw)
             return ToolResult(tool_call_id=call.id, content=content, is_error=False)
         except Exception as exc:  # noqa: BLE001

@@ -323,17 +323,21 @@ def _parse_tool_calls(text: str) -> list[ToolCall]:
     calls: list[ToolCall] = []
 
     # Pattern 1: <tool_call> blocks
+    # Use (\{.*) without requiring closing } to handle truncated model output
     for match in re.finditer(
-        r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, re.DOTALL
+        r"<tool_call>\s*(\{.*)\s*</tool_call>", text, re.DOTALL
     ):
+        raw = match.group(1).strip()
+        data = _try_load_tool_json(raw)
+        if data is None:
+            continue
         try:
-            data = json.loads(match.group(1))
             calls.append(ToolCall(
                 id=str(uuid.uuid4()),
                 name=data["name"],
                 arguments=data.get("arguments", {}),
             ))
-        except (json.JSONDecodeError, KeyError):
+        except KeyError:
             continue
 
     if calls:
@@ -354,6 +358,37 @@ def _parse_tool_calls(text: str) -> list[ToolCall]:
             continue
 
     return calls
+
+
+def _try_load_tool_json(raw: str) -> dict | None:
+    """Try to parse a JSON tool-call object, repairing common model output issues.
+
+    Handles:
+    - Unescaped literal newlines/tabs inside JSON string values
+    - Truncated output (missing one or more closing braces)
+    """
+    # Attempt 1: parse as-is
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt 2: escape literal control characters that models sometimes emit
+    # unescaped inside string values (e.g. actual newline chars instead of \n)
+    fixed = raw.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt 3: model may have been truncated — try appending closing braces
+    for extra in ("}", "}}", "}}}"):
+        try:
+            return json.loads(fixed + extra)
+        except json.JSONDecodeError:
+            continue
+
+    return None
 
 
 def _strip_tool_call_blocks(text: str) -> str:
