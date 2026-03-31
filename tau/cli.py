@@ -309,42 +309,46 @@ def _render_events(
         from tau.tools import shell as _shell_mod
         _shell_mod._confirm_hook = _confirm_with_flush
 
-    # Spinner for plain stdout mode (non-TUI)
+    # Spinner for plain stdout mode (non-TUI).
+    # Single long-lived thread; pause/resume via _spin_active event to avoid
+    # race conditions when starting a new spinner immediately after stopping.
     import threading as _thr
     _SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    _spin_stop = _thr.Event()
+    _spin_active = _thr.Event()   # set = spinning, clear = paused
+    _spin_exit = _thr.Event()     # set = thread should terminate
     _spin_msg = ["thinking..."]
-    _spin_running = [False]
 
     def _spin_loop() -> None:
         idx = 0
-        while not _spin_stop.is_set():
-            sys.stdout.write(f"\r  {_SPIN[idx % len(_SPIN)]} {_spin_msg[0]}")
-            sys.stdout.flush()
-            idx += 1
-            _spin_stop.wait(0.08)
-        # clear spinner line
+        while not _spin_exit.is_set():
+            if _spin_active.is_set():
+                sys.stdout.write(f"\r  {_SPIN[idx % len(_SPIN)]} {_spin_msg[0]}")
+                sys.stdout.flush()
+                idx += 1
+            _spin_exit.wait(0.08)
         sys.stdout.write("\r" + " " * 30 + "\r")
         sys.stdout.flush()
-        _spin_running[0] = False
 
     def _start_spinner(msg: str = "thinking...") -> None:
         if output_fn is not None:
             return
-        _spin_stop.clear()
         _spin_msg[0] = msg
-        _spin_running[0] = True
-        t = _thr.Thread(target=_spin_loop, daemon=True)
-        t.start()
-
-    _start_spinner("thinking...")
+        _spin_active.set()
 
     def _stop_spinner() -> None:
-        if _spin_running[0]:
-            _spin_stop.set()
+        if _spin_active.is_set():
+            _spin_active.clear()
             if output_fn is None:
                 sys.stdout.write("\r" + " " * 30 + "\r")
                 sys.stdout.flush()
+
+    def _kill_spinner() -> None:
+        _spin_active.clear()
+        _spin_exit.set()
+
+    if output_fn is None:
+        _thr.Thread(target=_spin_loop, daemon=True).start()
+    _start_spinner("thinking...")
 
     for event in agent.run(user_input, images=images):
         if ext_registry is not None:
@@ -418,6 +422,7 @@ def _render_events(
                     border_style=style,
                     padding=(0, 1),
                 ))
+            _start_spinner("thinking...")
         elif isinstance(event, TurnComplete):
             _stop_spinner()
             _flush_stream(end_line=True)
@@ -477,7 +482,7 @@ def _render_events(
                 _writeln(f"  ⚠ budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f} — stopping session")
             else:
                 console.print(f"[bold red]  ⚠ budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f} — stopping session[/bold red]")
-    _stop_spinner()
+    _kill_spinner()
     _flush_stream(end_line=True)
 
 # ---------------------------------------------------------------------------
