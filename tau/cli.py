@@ -300,7 +300,11 @@ def _render_events(
 
     def _confirm_with_flush(command: str) -> bool:
         _flush_stream(end_line=True)
-        return _default_confirm(command)
+        _stop_spinner()
+        result = _default_confirm(command)
+        if result:
+            _start_spinner("running...")
+        return result
 
     # In TUI mode, the REPL sets its own confirm hook (_tui_confirm)
     # on the shell module *before* the agent thread starts, so we only
@@ -1906,6 +1910,9 @@ def _repl(
             _append_output(f"  → {answer_display}\n")
             confirm_pending.clear()
             confirm_answered.set()
+            # Restart the spinner timer chain — it stopped while waiting for input.
+            if agent_running.is_set():
+                _tick_spinner()
             return
 
         if not text:
