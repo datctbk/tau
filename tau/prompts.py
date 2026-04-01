@@ -46,8 +46,15 @@ _VAR_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_-]*)\}\}")
 # Discovery
 # ---------------------------------------------------------------------------
 
-def _template_dirs(workspace_root: str) -> list[Path]:
-    """Return template directories in priority order (project first)."""
+def _template_dirs(
+    workspace_root: str,
+    extra_dirs: list[str] | None = None,
+) -> list[Path]:
+    """Return template directories in priority order (project first).
+
+    *extra_dirs* (lowest priority, e.g. from installed packages) are appended
+    after the global ``~/.tau/prompts/`` directory.
+    """
     dirs: list[Path] = []
     # Project-local
     project = Path(workspace_root).resolve() / ".tau" / _PROMPTS_DIR
@@ -57,17 +64,26 @@ def _template_dirs(workspace_root: str) -> list[Path]:
     global_dir = TAU_HOME / _PROMPTS_DIR
     if global_dir.is_dir():
         dirs.append(global_dir)
+    # Package-supplied (lowest priority)
+    for d in (extra_dirs or []):
+        p = Path(d)
+        if p.is_dir():
+            dirs.append(p)
     return dirs
 
 
-def list_templates(workspace_root: str) -> dict[str, Path]:
+def list_templates(
+    workspace_root: str,
+    extra_dirs: list[str] | None = None,
+) -> dict[str, Path]:
     """Return ``{name: path}`` for all discovered templates.
 
     Project templates shadow global ones with the same name.
+    *extra_dirs* (e.g. from installed packages) are at lowest priority.
     """
     templates: dict[str, Path] = {}
     # Scan in reverse priority so that project-local overwrites global
-    for d in reversed(_template_dirs(workspace_root)):
+    for d in reversed(_template_dirs(workspace_root, extra_dirs=extra_dirs)):
         for p in sorted(d.glob("*.md")):
             if p.is_file():
                 templates[p.stem] = p

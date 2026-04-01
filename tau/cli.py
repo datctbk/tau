@@ -200,13 +200,25 @@ def _build_agent(
     context_text = load_context_files(agent_config.workspace_root)
     if context_text:
         context.inject_prompt_fragment(context_text)
+    # Resolve package-supplied resource paths
+    try:
+        from tau.packages import PackageManager as _PM
+        _pm = _PM()
+        _pkg_skill_paths: list[str] = _pm.get_resource_paths("skills")
+        _pkg_extension_paths: list[str] = _pm.get_resource_paths("extensions")
+        _pkg_prompt_paths: list[str] = _pm.get_resource_paths("prompts")
+    except Exception:
+        _pkg_skill_paths = []
+        _pkg_extension_paths = []
+        _pkg_prompt_paths = []
+
     loader = SkillLoader(
-        extra_paths=tau_config.skills.paths,
+        extra_paths=list(tau_config.skills.paths) + _pkg_skill_paths,
         disabled=tau_config.skills.disabled,
     )
     loader.load_into(registry, context)
     ext_registry = ExtensionRegistry(
-        extra_paths=tau_config.extensions.paths,
+        extra_paths=list(tau_config.extensions.paths) + _pkg_extension_paths,
         disabled=tau_config.extensions.disabled,
     )
     ext_registry.load_all(
@@ -3023,13 +3035,18 @@ def extensions_show(name: str) -> None:
 @extensions_group.command("install")
 @click.argument("source")
 def extensions_install(source: str) -> None:
-    """Install an extension package.
+    """Install a package (extensions, skills, prompts, themes).
 
-    SOURCE is 'git:<url>' or 'pip:<package>'.
+    SOURCE forms:
+      npm:<package>[@version]   install from npm registry
+      git:<url>[@ref]           clone a git repository
+      https://<url>[@ref]       clone via HTTPS
+      ssh://<url>[@ref]         clone via SSH
 
     Examples:
+      tau extensions install npm:tau-ext-foobar
       tau extensions install git:https://github.com/user/my-ext
-      tau extensions install pip:tau-ext-foobar
+      tau extensions install https://github.com/user/my-ext@v1.2.0
     """
     ensure_tau_home()
     from tau.packages import PackageManager, PackageError
@@ -3053,6 +3070,7 @@ def extensions_install(source: str) -> None:
 
 
 @extensions_group.command("remove")
+@click.argument("name")
 @click.argument("name")
 @click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation.")
 def extensions_remove(name: str, yes: bool) -> None:
@@ -3098,6 +3116,44 @@ def extensions_update(name: str | None) -> None:
             ))
     else:
         console.print("[dim]  No packages to update.[/dim]")
+
+
+@extensions_group.command("enable")
+@click.argument("name")
+def extensions_enable(name: str) -> None:
+    """Enable a previously disabled package."""
+    ensure_tau_home()
+    from tau.packages import PackageManager, PackageNotFoundError
+    pm = PackageManager()
+    try:
+        pm.enable(name)
+        console.print(Text.assemble(
+            ("  ✓ ", Style(color="green", bold=True)),
+            ("enabled ", Style(color="green")),
+            (name, Style(color="cyan", bold=True)),
+        ))
+    except PackageNotFoundError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+
+
+@extensions_group.command("disable")
+@click.argument("name")
+def extensions_disable(name: str) -> None:
+    """Disable a package (keeps it installed but skips loading)."""
+    ensure_tau_home()
+    from tau.packages import PackageManager, PackageNotFoundError
+    pm = PackageManager()
+    try:
+        pm.disable(name)
+        console.print(Text.assemble(
+            ("  ✓ ", Style(color="yellow", bold=True)),
+            ("disabled ", Style(color="yellow")),
+            (name, Style(color="cyan", bold=True)),
+        ))
+    except PackageNotFoundError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
