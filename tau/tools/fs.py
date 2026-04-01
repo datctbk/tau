@@ -99,6 +99,130 @@ def search_files(pattern: str, path: str = ".", use_regex: bool = False) -> str:
     return "\n".join(matches[:200]) if matches else "No matches found."
 
 
+def grep(
+    pattern: str,
+    path: str = ".",
+    recursive: bool = True,
+    case_insensitive: bool = False,
+    include: str = "",
+    max_results: int = 200,
+) -> str:
+    """Search for a regex pattern across file contents."""
+    root = _resolve(path)
+    flags = re.IGNORECASE if case_insensitive else 0
+    try:
+        compiled = re.compile(pattern, flags)
+    except re.error as exc:
+        return f"Invalid regex: {exc}"
+
+    matches: list[str] = []
+    include_pat = re.compile(include) if include else None
+
+    targets: list[Path] = []
+    if root.is_file():
+        targets = [root]
+    elif recursive:
+        targets = [f for f in root.rglob("*") if f.is_file()]
+    else:
+        targets = [f for f in root.iterdir() if f.is_file()]
+
+    for fpath in sorted(targets):
+        if include_pat and not include_pat.search(fpath.name):
+            continue
+        try:
+            text = fpath.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if compiled.search(line):
+                try:
+                    rel = fpath.relative_to(Path(_workspace_root).resolve())
+                except ValueError:
+                    rel = fpath
+                matches.append(f"{rel}:{i}: {line.rstrip()}")
+                if len(matches) >= max_results:
+                    return "\n".join(matches) + f"\n(truncated at {max_results} results)"
+    return "\n".join(matches) if matches else "No matches found."
+
+
+def find(
+    path: str = ".",
+    name: str = "",
+    type: str = "",
+    max_depth: int = -1,
+    max_results: int = 200,
+) -> str:
+    """Find files or directories by name pattern and/or type."""
+    root = _resolve(path)
+    name_pat = re.compile(name) if name else None
+    results: list[str] = []
+
+    def _walk(cur: Path, depth: int) -> None:
+        if max_depth >= 0 and depth > max_depth:
+            return
+        try:
+            entries = sorted(cur.iterdir())
+        except PermissionError:
+            return
+        for entry in entries:
+            if len(results) >= max_results:
+                return
+            # type filter
+            if type == "f" and not entry.is_file():
+                pass
+            elif type == "d" and not entry.is_dir():
+                pass
+            else:
+                match_name = (not name_pat) or bool(name_pat.search(entry.name))
+                match_type = (
+                    (not type)
+                    or (type == "f" and entry.is_file())
+                    or (type == "d" and entry.is_dir())
+                )
+                if match_name and match_type:
+                    try:
+                        rel = entry.relative_to(Path(_workspace_root).resolve())
+                    except ValueError:
+                        rel = entry
+                    results.append(str(rel))
+            if entry.is_dir():
+                _walk(entry, depth + 1)
+
+    _walk(root, 0)
+    suffix = f"\n(truncated at {max_results} results)" if len(results) >= max_results else ""
+    return ("\n".join(results) + suffix) if results else "No matches found."
+
+
+def ls(path: str = ".", all: bool = False, long: bool = False) -> str:
+    """List directory contents, optionally with hidden files and metadata."""
+    import stat as _stat
+    p = _resolve(path)
+    if not p.is_dir():
+        raise NotADirectoryError(f"{path!r} is not a directory.")
+    entries = sorted(p.iterdir(), key=lambda e: (e.is_file(), e.name.lower()))
+    if not all:
+        entries = [e for e in entries if not e.name.startswith(".")]
+    if not entries:
+        return "(empty)"
+    if not long:
+        lines = [f"{e.name}{'/' if e.is_dir() else ''}" for e in entries]
+        return "\n".join(lines)
+    # long format
+    import datetime as _dt
+    lines: list[str] = []
+    for e in entries:
+        try:
+            st = e.stat()
+            mode = _stat.filemode(st.st_mode)
+            size = st.st_size
+            mtime = _dt.datetime.fromtimestamp(st.st_mtime).strftime("%b %d %H:%M")
+        except OSError:
+            mode, size, mtime = "?---------", 0, "?"
+        name = f"{e.name}{'/' if e.is_dir() else ''}"
+        lines.append(f"{mode}  {size:>10}  {mtime}  {name}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # ToolDefinition list
 # ---------------------------------------------------------------------------
@@ -156,5 +280,46 @@ FS_TOOLS: list[ToolDefinition] = [
             "use_regex": ToolParameter(type="boolean", description="If true, treat pattern as a regex.", required=False),
         },
         handler=search_files,
+    ),
+    ToolDefinition(
+        name="grep",
+        description=(
+            "Search file contents for a regex pattern. "
+            "Returns matching lines with file path and line number. "
+            "Supports recursive search, case-insensitive mode, and filename filtering."
+        ),
+        parameters={
+            "pattern": ToolParameter(type="string", description="Regular expression to search for."),
+            "path": ToolParameter(type="string", description="File or directory to search. Defaults to workspace root.", required=False),
+            "recursive": ToolParameter(type="boolean", description="Search subdirectories recursively (default true).", required=False),
+            "case_insensitive": ToolParameter(type="boolean", description="Case-insensitive matching (default false).", required=False),
+            "include": ToolParameter(type="string", description="Regex filter on filename (e.g. '\\.py$'). Empty = all files.", required=False),
+            "max_results": ToolParameter(type="integer", description="Maximum number of matching lines to return (default 200).", required=False),
+        },
+        handler=grep,
+    ),
+    ToolDefinition(
+        name="find",
+        description=(
+            "Find files or directories matching a name pattern and/or type under a path."
+        ),
+        parameters={
+            "path": ToolParameter(type="string", description="Directory to search from. Defaults to workspace root.", required=False),
+            "name": ToolParameter(type="string", description="Regex pattern to match against entry names. Empty = all.", required=False),
+            "type": ToolParameter(type="string", description="Filter by type: 'f' = files only, 'd' = directories only. Empty = both.", required=False),
+            "max_depth": ToolParameter(type="integer", description="Maximum directory depth (-1 = unlimited).", required=False),
+            "max_results": ToolParameter(type="integer", description="Maximum number of results (default 200).", required=False),
+        },
+        handler=find,
+    ),
+    ToolDefinition(
+        name="ls",
+        description="List directory contents with optional hidden-file and long-format display.",
+        parameters={
+            "path": ToolParameter(type="string", description="Directory path (relative to workspace root). Defaults to '.'.", required=False),
+            "all": ToolParameter(type="boolean", description="Include hidden files (names starting with '.'). Default false.", required=False),
+            "long": ToolParameter(type="boolean", description="Long format: permissions, size, modification time. Default false.", required=False),
+        },
+        handler=ls,
     ),
 ]

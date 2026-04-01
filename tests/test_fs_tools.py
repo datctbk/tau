@@ -2,7 +2,7 @@
 
 import pytest
 from pathlib import Path
-from tau.tools.fs import read_file, write_file, edit_file, list_dir, search_files, _resolve
+from tau.tools.fs import read_file, write_file, edit_file, list_dir, search_files, grep, find, ls, _resolve
 
 
 @pytest.fixture()
@@ -76,3 +76,153 @@ def test_search_files_regex(workspace: Path):
     write_file("data.txt", "error: something failed\n")
     out = search_files(r"error:\s+\w+", ".", use_regex=True)
     assert "data.txt" in out
+
+
+# ---------------------------------------------------------------------------
+# grep
+# ---------------------------------------------------------------------------
+
+def test_grep_basic(workspace: Path):
+    write_file("app.py", "def foo():\n    return 1\n")
+    out = grep("def foo", ".")
+    assert "app.py" in out
+    assert "def foo" in out
+
+
+def test_grep_line_number(workspace: Path):
+    write_file("app.py", "line1\nTARGET\nline3\n")
+    out = grep("TARGET", ".")
+    assert ":2:" in out
+
+
+def test_grep_case_insensitive(workspace: Path):
+    write_file("readme.txt", "Hello World\n")
+    out = grep("hello world", ".", case_insensitive=True)
+    assert "readme.txt" in out
+
+
+def test_grep_case_sensitive_no_match(workspace: Path):
+    write_file("readme.txt", "Hello World\n")
+    out = grep("hello world", ".", case_insensitive=False)
+    assert "No matches" in out
+
+
+def test_grep_include_filter(workspace: Path):
+    write_file("code.py", "import os\n")
+    write_file("notes.txt", "import note\n")
+    out = grep("import", ".", include=r"\.py$")
+    assert "code.py" in out
+    assert "notes.txt" not in out
+
+
+def test_grep_max_results(workspace: Path):
+    write_file("big.txt", ("match\n" * 50))
+    out = grep("match", ".", max_results=5)
+    assert "truncated at 5" in out
+
+
+def test_grep_invalid_regex(workspace: Path):
+    out = grep("[invalid(", ".")
+    assert "Invalid regex" in out
+
+
+def test_grep_no_match(workspace: Path):
+    write_file("f.txt", "nothing here\n")
+    out = grep("ZZZNOMATCH", ".")
+    assert "No matches" in out
+
+
+# ---------------------------------------------------------------------------
+# find
+# ---------------------------------------------------------------------------
+
+def test_find_all(workspace: Path):
+    write_file("a.py", "")
+    write_file("sub/b.txt", "")
+    out = find(".")
+    assert "a.py" in out
+    assert "b.txt" in out
+
+
+def test_find_by_name(workspace: Path):
+    write_file("foo.py", "")
+    write_file("bar.txt", "")
+    out = find(".", name=r"\.py$")
+    assert "foo.py" in out
+    assert "bar.txt" not in out
+
+
+def test_find_files_only(workspace: Path):
+    write_file("file.txt", "")
+    (workspace / "mydir").mkdir()
+    out = find(".", type="f")
+    assert "file.txt" in out
+    assert "mydir" not in out
+
+
+def test_find_dirs_only(workspace: Path):
+    write_file("file.txt", "")
+    (workspace / "mydir").mkdir()
+    out = find(".", type="d")
+    assert "mydir" in out
+    assert "file.txt" not in out
+
+
+def test_find_max_depth(workspace: Path):
+    write_file("top.txt", "")
+    write_file("sub/deep.txt", "")
+    out = find(".", max_depth=0)
+    assert "top.txt" in out
+    assert "deep.txt" not in out
+
+
+def test_find_no_match(workspace: Path):
+    write_file("f.py", "")
+    out = find(".", name="ZZZNOMATCH")
+    assert "No matches" in out
+
+
+# ---------------------------------------------------------------------------
+# ls
+# ---------------------------------------------------------------------------
+
+def test_ls_basic(workspace: Path):
+    write_file("x.txt", "")
+    (workspace / "subdir").mkdir()
+    out = ls(".")
+    assert "x.txt" in out
+    assert "subdir/" in out
+
+
+def test_ls_hidden_excluded_by_default(workspace: Path):
+    write_file(".hidden", "")
+    write_file("visible.txt", "")
+    out = ls(".")
+    assert "visible.txt" in out
+    assert ".hidden" not in out
+
+
+def test_ls_hidden_included_with_all(workspace: Path):
+    write_file(".hidden", "")
+    out = ls(".", all=True)
+    assert ".hidden" in out
+
+
+def test_ls_long_format(workspace: Path):
+    write_file("f.txt", "hello")
+    out = ls(".", long=True)
+    # long format includes permissions and size
+    assert "f.txt" in out
+    assert "5" in out  # size of "hello"
+
+
+def test_ls_empty_dir(workspace: Path):
+    (workspace / "empty").mkdir()
+    out = ls("empty")
+    assert out == "(empty)"
+
+
+def test_ls_not_a_dir(workspace: Path):
+    write_file("f.txt", "")
+    with pytest.raises(NotADirectoryError):
+        ls("f.txt")

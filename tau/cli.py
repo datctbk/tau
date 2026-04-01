@@ -122,6 +122,16 @@ _AGENT_OPTIONS = [
     click.option("--max-cost", "max_cost", type=float, default=None, help="USD budget ceiling; stop session when exceeded."),
     click.option("--no-session", is_flag=True, default=False, help="Ephemeral mode: don't persist the session to disk."),
     click.option("--trace-log", "trace_log", is_flag=False, flag_value="__default__", default=None, help="Log full LLM requests/responses to a file (default: <workspace>/tau-trace.log)."),
+    click.option(
+        "--tools",
+        "tools_filter",
+        default=None,
+        help=(
+            "Comma-separated list of built-in tools to enable. "
+            "Available: read_file, write_file, edit_file, list_dir, search_files, grep, find, ls, run_bash. "
+            "Example: --tools read_file,grep,find,ls"
+        ),
+    ),
 ]
 
 def _agent_options(fn):
@@ -140,12 +150,19 @@ def _build_agent(
     resume_id: str | None,
     confirm_hook: Callable[[str], bool] | None = None,
     steering: SteeringChannel | None = None,
+    tools_filter: str | None = None,
 ) -> tuple[Agent, ExtensionRegistry]:
     registry = ToolRegistry()
     register_builtin_tools(registry)
 
+    # --tools CLI flag takes precedence over config file settings
+    if tools_filter is not None:
+        requested = {t.strip() for t in tools_filter.split(",") if t.strip()}
+        for name in list(registry.names()):
+            if name not in requested:
+                registry.unregister(name)
     # Apply configurable tool set: disabled / enabled_only
-    if tau_config.tools.enabled_only:
+    elif tau_config.tools.enabled_only:
         allowed = set(tau_config.tools.enabled_only)
         for name in list(registry.names()):
             if name not in allowed:
@@ -618,11 +635,18 @@ def _tree_navigator(
       f            fork-only: save branch without changing live context
       b            toggle bookmark on selected message
       B            jump to next bookmark
+      L            edit label for bookmark at cursor (adds bookmark if needed)
+      T            toggle timestamp display
+      /            enter search mode — type to filter by message content
+      Ctrl+O       cycle filter: all → default → no-tools → user-only → labeled-only
+      Ctrl+←       fold tool messages below cursor
+      Ctrl+→       unfold tool messages below cursor
       → / l        navigate into a child branch (if any at selected row)
       ← / h        go back to parent session view
       Esc / q      cancel and return to REPL
     """
     from prompt_toolkit import Application
+    from prompt_toolkit.filters import Condition as _Condition
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.layout import Layout, HSplit, Window
     from prompt_toolkit.layout.controls import FormattedTextControl
@@ -654,14 +678,24 @@ def _tree_navigator(
 
     _nav_stack: "list[dict]" = [_load_frame(agent._session)]
 
-    cursor: "list[int]" = [len(agent._session.messages) - 1]
+    # cursor: index into vis_idxs(), NOT the raw message list
+    cursor: "list[int]" = [0]
     status: "list[str]" = [""]
-    # mode: "list" | "pick_child"
+    # mode: "list" | "pick_child" | "search" | "label"
     mode: "list[str]" = ["list"]
     pick_children: "list" = []
     pick_cursor: "list[int]" = [0]
     result: "list[str | None]" = [None]   # "branch" | "fork" | None
     app_ref: "list[Application | None]" = [None]
+
+    # ── new feature state ─────────────────────────────────────────────────
+    _FILTER_CYCLE = ["all", "default", "no-tools", "user-only", "labeled-only"]
+    filter_mode: "list[str]" = ["all"]
+    show_ts: "list[bool]" = [False]
+    search_query: "list[str]" = [""]
+    folded: "list[set]" = [set()]
+    label_input: "list[str]" = [""]
+    label_orig: "list[str]" = [""]   # saved for Esc-cancel
 
     # ── frame accessors ──────────────────────────────────────────────────
 
@@ -680,11 +714,77 @@ def _tree_navigator(
     def _cur_branches() -> "dict":
         return _frame()["branches"]
 
+    # ── visible-index computation ────────────────────────────────────────
+
+    def vis_idxs() -> "list[int]":
+        """Real message indices visible under current filter, search, and folds."""
+        msgs = _cur_msgs()
+        bm_set = _cur_bookmarked()
+        fm = filter_mode[0]
+        q = search_query[0].lower()
+        visible: "list[int]" = []
+        skip_tools = False
+        for i, msg in enumerate(msgs):
+            role = msg.get("role", "")
+            # skip folded tool-result run
+            if skip_tools:
+                if role == "tool":
+                    continue
+                skip_tools = False
+            # filter mode
+            if fm == "default":
+                if role == "tool":
+                    continue
+            elif fm == "no-tools":
+                if role == "tool":
+                    continue
+                if role == "assistant":
+                    raw = msg.get("content") or ""
+                    text = (
+                        raw.strip() if isinstance(raw, str)
+                        else " ".join(
+                            p.get("text", "") for p in raw if isinstance(p, dict)
+                        ).strip()
+                    )
+                    if msg.get("tool_calls") and not text:
+                        continue
+            elif fm == "user-only":
+                if role != "user":
+                    continue
+            elif fm == "labeled-only":
+                if i not in bm_set:
+                    continue
+            # "all": pass through
+            # search filter
+            if q:
+                raw = msg.get("content") or ""
+                if isinstance(raw, list):
+                    raw = " ".join(
+                        p.get("text", "") for p in raw if isinstance(p, dict)
+                    )
+                if q not in raw.lower():
+                    continue
+            visible.append(i)
+            # if this row is folded, hide its subsequent tool messages
+            if i in folded[0]:
+                skip_tools = True
+        return visible
+
+    def _real_idx() -> "int | None":
+        """Real message index under the cursor, or None."""
+        v = vis_idxs()
+        if not v or cursor[0] >= len(v):
+            return None
+        return v[cursor[0]]
+
+    # initialise cursor to last visible message
+    cursor[0] = max(0, len(vis_idxs()) - 1)
+
     # ── rendering ────────────────────────────────────────────────────────
 
-    def _row(idx: int, selected: bool) -> str:
+    def _row(vis_pos: int, real_i: int, selected: bool) -> str:
         msgs = _cur_msgs()
-        msg = msgs[idx]
+        msg = msgs[real_i]
         role = msg.get("role", "?")
         icon = _TREE_ROLE_ICON.get(role, "?")
         colour = _TREE_ROLE_COLOUR.get(role, "")
@@ -701,25 +801,49 @@ def _tree_navigator(
         if msg.get("tool_call_id"):
             extra_badges.append("[tr]")
 
-        bm_icon = f"{_TREE_BOLD}\033[33m★\033[0m" if idx in _cur_bookmarked() else " "
-        branch_count = len(_cur_branches().get(idx, []))
+        # fold indicator
+        fold_badge = ""
+        if real_i in folded[0]:
+            all_msgs = _cur_msgs()
+            hidden = 0
+            for j in range(real_i + 1, len(all_msgs)):
+                if all_msgs[j].get("role") == "tool":
+                    hidden += 1
+                else:
+                    break
+            fold_badge = f" {_TREE_DIM}[▶{hidden} folded]{_TREE_RESET}"
+
+        bm_icon = f"{_TREE_BOLD}\033[33m★\033[0m" if real_i in _cur_bookmarked() else " "
+        branch_count = len(_cur_branches().get(real_i, []))
         br_icon = (
             f"{_TREE_CYAN}⎇{branch_count}\033[0m" if branch_count else "  "
         )
         badge_str = f" {_TREE_DIM}{''.join(extra_badges)}{_TREE_RESET}" if extra_badges else ""
-        index_str = f"{idx:3}"
+        index_str = f"{real_i:3}"
+
+        # timestamp column
+        ts_str = ""
+        if show_ts[0]:
+            ts_val = (
+                msg.get("ts") or msg.get("timestamp") or msg.get("created_at") or ""
+            )
+            ts_str = (
+                f" {_TREE_DIM}{str(ts_val)[:5]}{_TREE_RESET}"
+                if ts_val
+                else f" {_TREE_DIM}──:──{_TREE_RESET}"
+            )
 
         if selected:
             line = (
                 f"{_TREE_INVERT}{_TREE_BOLD}"
                 f"  {index_str} {icon} {preview}"
-                f"{_TREE_RESET} {bm_icon} {br_icon}{badge_str}"
+                f"{_TREE_RESET}{ts_str} {bm_icon} {br_icon}{badge_str}{fold_badge}"
             )
         else:
             line = (
                 f"  {_TREE_DIM}{index_str}{_TREE_RESET} "
                 f"{colour}{icon} {preview}{_TREE_RESET}"
-                f" {bm_icon} {br_icon}{badge_str}"
+                f"{ts_str} {bm_icon} {br_icon}{badge_str}{fold_badge}"
             )
         return line + "\n"
 
@@ -727,7 +851,7 @@ def _tree_navigator(
         crumbs = []
         for i, frame in enumerate(_nav_stack):
             s = frame["session"]
-            label = (s.name or s.id[:8])
+            label = s.name or s.id[:8]
             if i == len(_nav_stack) - 1:
                 crumbs.append(f"{_TREE_BOLD}{_TREE_CYAN}{label}{_TREE_RESET}")
             else:
@@ -735,6 +859,7 @@ def _tree_navigator(
         breadcrumb = f" {_TREE_DIM}→{_TREE_RESET} ".join(crumbs)
 
         n = len(_cur_msgs())
+        vis_n = len(vis_idxs())
         bm_count = len(_cur_bookmarked())
         bm_str = f"  {_TREE_DIM}\033[33m★{bm_count}\033[0m" if bm_count else ""
 
@@ -746,18 +871,43 @@ def _tree_navigator(
                 f"{cur_s.parent_id[:8]}@{cur_s.fork_index}{_TREE_RESET}"
             )
 
+        fm = filter_mode[0]
+        fm_str = f"  {_TREE_CYAN}[{fm}]{_TREE_RESET}" if fm != "all" else ""
+        q = search_query[0]
+        q_str = f"  {_TREE_CYAN}/{q}{_TREE_RESET}" if q else ""
+        ts_str = f"  {_TREE_DIM}[ts]{_TREE_RESET}" if show_ts[0] else ""
+        vis_note = f"/{n}" if vis_n != n else ""
+
         keys = (
-            "↑↓ move  Enter branch  f fork  b bkm  B next  "
-            "→/← child/parent  q quit"
+            "↑↓ move  Enter branch  f fork  b bkm  B next  L label  "
+            "→/← child/parent  ^O filter  T ts  / search  q quit"
         )
         return (
             f"{_TREE_BOLD}{_TREE_CYAN}  ⎇  {_TREE_RESET}{breadcrumb}"
-            f"  {_TREE_DIM}{n} msg{bm_str}{parent_note}{_TREE_RESET}\n"
+            f"  {_TREE_DIM}{vis_n}{vis_note} msg{bm_str}{parent_note}{_TREE_RESET}"
+            f"{fm_str}{q_str}{ts_str}\n"
             f"{_TREE_DIM}  {keys}{_TREE_RESET}\n"
             f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
         )
 
     def _footer() -> str:
+        if mode[0] == "search":
+            q = search_query[0]
+            vis_n = len(vis_idxs())
+            return (
+                f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
+                f"  {_TREE_BOLD}{_TREE_CYAN}/ {q}▌{_TREE_RESET}"
+                f"  {_TREE_DIM}({vis_n} match{'es' if vis_n != 1 else ''})"
+                f"  Enter confirm  Backspace delete  Esc clear{_TREE_RESET}\n"
+            )
+
+        if mode[0] == "label":
+            return (
+                f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
+                f"  {_TREE_BOLD}\033[33mLabel:{_TREE_RESET} {label_input[0]}▌"
+                f"  {_TREE_DIM}Enter confirm  Esc cancel{_TREE_RESET}\n"
+            )
+
         if mode[0] == "pick_child":
             lines = [f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"]
             lines.append(
@@ -782,18 +932,18 @@ def _tree_navigator(
                 f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
                 f"  {s}\n"
             )
-        idx = cursor[0]
+        real_i = _real_idx()
         msgs = _cur_msgs()
-        if 0 <= idx < len(msgs):
-            msg = msgs[idx]
+        if real_i is not None and 0 <= real_i < len(msgs):
+            msg = msgs[real_i]
             role = msg.get("role", "?")
             raw = (msg.get("content") or "").replace("\n", " ").strip()
             bm_label = ""
             for bm in _cur_session().bookmarks:
-                if bm["index"] == idx:
+                if bm["index"] == real_i:
                     bm_label = f"  \033[33m★ {bm.get('label', '')[:40]}\033[0m"
                     break
-            branches_here = _cur_branches().get(idx, [])
+            branches_here = _cur_branches().get(real_i, [])
             br_info = ""
             if branches_here:
                 names = ", ".join(b.name or b.id[:8] for b in branches_here[:3])
@@ -801,31 +951,44 @@ def _tree_navigator(
                 br_info = f"  {_TREE_CYAN}⎇ {names}{extra}{_TREE_RESET}"
             return (
                 f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n"
-                f"  {_TREE_DIM}[{idx}] {role}  {raw[:60]}{_TREE_RESET}"
+                f"  {_TREE_DIM}[{real_i}] {role}  {raw[:60]}{_TREE_RESET}"
                 f"{bm_label}{br_info}\n"
             )
         return f"{_TREE_DIM}{'─' * 72}{_TREE_RESET}\n\n"
 
     def _build_text() -> ANSI:
         parts = [_header()]
-        for i in range(len(_cur_msgs())):
-            parts.append(_row(i, i == cursor[0]))
+        vis = vis_idxs()
+        if not vis:
+            parts.append(f"  {_TREE_DIM}no messages match filter{_TREE_RESET}\n")
+        else:
+            for vis_pos, real_i in enumerate(vis):
+                parts.append(_row(vis_pos, real_i, vis_pos == cursor[0]))
         parts.append(_footer())
         return ANSI("".join(parts))
 
-    # ── helpers ──────────────────────────────────────────────────────────
+    # ── action helpers ────────────────────────────────────────────────────
 
     def _clamp() -> None:
-        total = len(_cur_msgs())
-        cursor[0] = max(0, min(total - 1, cursor[0]))
+        total = len(vis_idxs())
+        cursor[0] = max(0, min(total - 1, cursor[0])) if total else 0
 
     def _move(delta: int) -> None:
         if mode[0] == "pick_child":
             pick_cursor[0] = max(0, min(len(pick_children) - 1, pick_cursor[0] + delta))
         else:
-            total = len(_cur_msgs())
+            total = len(vis_idxs())
             cursor[0] = max(0, min(total - 1, cursor[0] + delta))
         status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _cycle_filter() -> None:
+        fm = filter_mode[0]
+        next_idx = (_FILTER_CYCLE.index(fm) + 1) % len(_FILTER_CYCLE)
+        filter_mode[0] = _FILTER_CYCLE[next_idx]
+        _clamp()
+        status[0] = f"{_TREE_DIM}filter: {filter_mode[0]}{_TREE_RESET}"
         if app_ref[0]:
             app_ref[0].invalidate()
 
@@ -836,29 +999,114 @@ def _tree_navigator(
             if app_ref[0]:
                 app_ref[0].invalidate()
             return
-        nxt = next((i for i in bms if i > cursor[0]), bms[0])
-        cursor[0] = nxt
+        real_i = _real_idx()
+        cur_real = real_i if real_i is not None else -1
+        nxt_real = next((i for i in bms if i > cur_real), bms[0])
+        vis = vis_idxs()
+        if nxt_real in vis:
+            cursor[0] = vis.index(nxt_real)
+        else:
+            # bookmark not visible under current filter — switch to "all"
+            filter_mode[0] = "all"
+            vis = vis_idxs()
+            if nxt_real in vis:
+                cursor[0] = vis.index(nxt_real)
         status[0] = ""
         if app_ref[0]:
             app_ref[0].invalidate()
 
     def _toggle_bookmark() -> None:
-        idx = cursor[0]
+        real_i = _real_idx()
         msgs = _cur_msgs()
-        if idx < 0 or idx >= len(msgs):
+        if real_i is None or real_i >= len(msgs):
             return
-        added = sm.toggle_bookmark(_cur_session(), idx)
+        added = sm.toggle_bookmark(_cur_session(), real_i)
         _frame()["bookmarked"] = {b["index"] for b in _cur_session().bookmarks}
-        action = f"\033[33m★\033[0m bookmarked [{idx}]" if added else f"removed bookmark [{idx}]"
+        action = (
+            f"\033[33m★\033[0m bookmarked [{real_i}]" if added
+            else f"removed bookmark [{real_i}]"
+        )
         status[0] = action
         if app_ref[0]:
             app_ref[0].invalidate()
 
+    def _start_label_edit() -> None:
+        real_i = _real_idx()
+        msgs = _cur_msgs()
+        if real_i is None or real_i >= len(msgs):
+            return
+        # ensure bookmarked first
+        if real_i not in _cur_bookmarked():
+            sm.toggle_bookmark(_cur_session(), real_i)
+            _frame()["bookmarked"] = {b["index"] for b in _cur_session().bookmarks}
+        existing = next(
+            (b.get("label", "") for b in _cur_session().bookmarks if b["index"] == real_i),
+            "",
+        )
+        label_input[0] = existing
+        label_orig[0] = existing
+        mode[0] = "label"
+        status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _confirm_label() -> None:
+        real_i = _real_idx()
+        if real_i is not None:
+            session = _cur_session()
+            for bm in session.bookmarks:
+                if bm["index"] == real_i:
+                    bm["label"] = label_input[0]
+                    break
+            sm.save(session)
+            status[0] = f"\033[33m★\033[0m label: {label_input[0][:40]}"
+        mode[0] = "list"
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _cancel_label() -> None:
+        label_input[0] = label_orig[0]
+        mode[0] = "list"
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _fold_at_cursor() -> None:
+        real_i = _real_idx()
+        if real_i is None:
+            return
+        msgs = _cur_msgs()
+        next_i = real_i + 1
+        if next_i < len(msgs) and msgs[next_i].get("role") == "tool":
+            folded[0].add(real_i)
+            _clamp()
+            status[0] = f"{_TREE_DIM}folded tool messages at [{real_i}]{_TREE_RESET}"
+        else:
+            status[0] = f"{_TREE_DIM}no tool messages to fold here{_TREE_RESET}"
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    def _unfold_at_cursor() -> None:
+        real_i = _real_idx()
+        if real_i is None:
+            return
+        if real_i in folded[0]:
+            folded[0].discard(real_i)
+            _clamp()
+            status[0] = f"{_TREE_DIM}unfolded [{real_i}]{_TREE_RESET}"
+        else:
+            status[0] = f"{_TREE_DIM}not folded{_TREE_RESET}"
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
     def _navigate_into() -> None:
-        idx = cursor[0]
-        children = _cur_branches().get(idx, [])
+        real_i = _real_idx()
+        if real_i is None:
+            return
+        children = _cur_branches().get(real_i, [])
         if not children:
-            status[0] = f"{_TREE_DIM}no branches at [{idx}] — press 'f' to fork here{_TREE_RESET}"
+            status[0] = (
+                f"{_TREE_DIM}no branches at [{real_i}] — press 'f' to fork here{_TREE_RESET}"
+            )
             if app_ref[0]:
                 app_ref[0].invalidate()
             return
@@ -877,7 +1125,7 @@ def _tree_navigator(
             child_session = sm.load(child_meta.id)
             frame = _load_frame(child_session)
             _nav_stack.append(frame)
-            cursor[0] = len(child_session.messages) - 1
+            cursor[0] = max(0, len(vis_idxs()) - 1)
             status[0] = ""
         except Exception as exc:
             status[0] = f"{_TREE_RED}✗ could not load {child_meta.id[:8]}: {exc}{_TREE_RESET}"
@@ -907,27 +1155,34 @@ def _tree_navigator(
 
     kb = KeyBindings()
 
+    # Conditions: letter shortcuts are disabled in text-input modes so that
+    # <any> can catch printable characters for search / label editing.
+    _in_nav = _Condition(lambda: mode[0] in ("list", "pick_child"))
+    _in_list = _Condition(lambda: mode[0] == "list")
+
+    # Arrow keys are not printable — safe to bind unconditionally with guards.
     @kb.add("up")
-    @kb.add("k")
-    def _up(_: object) -> None:
-        _move(-1)
+    def _up_arrow(_: object) -> None:
+        if mode[0] not in ("search", "label"):
+            _move(-1)
 
     @kb.add("down")
-    @kb.add("j")
-    def _down(_: object) -> None:
-        _move(1)
+    def _down_arrow(_: object) -> None:
+        if mode[0] not in ("search", "label"):
+            _move(1)
 
     @kb.add("pageup")
     def _pgup(_: object) -> None:
-        _move(-10)
+        if mode[0] not in ("search", "label"):
+            _move(-10)
 
     @kb.add("pagedown")
     def _pgdn(_: object) -> None:
-        _move(10)
+        if mode[0] not in ("search", "label"):
+            _move(10)
 
     @kb.add("home")
-    @kb.add("g")
-    def _home(_: object) -> None:
+    def _home_arrow(_: object) -> None:
         if mode[0] == "list":
             cursor[0] = 0
             status[0] = ""
@@ -935,51 +1190,62 @@ def _tree_navigator(
                 app_ref[0].invalidate()
 
     @kb.add("end")
-    @kb.add("G")
-    def _end(_: object) -> None:
+    def _end_arrow(_: object) -> None:
         if mode[0] == "list":
-            cursor[0] = len(_cur_msgs()) - 1
+            cursor[0] = max(0, len(vis_idxs()) - 1)
             status[0] = ""
             if app_ref[0]:
                 app_ref[0].invalidate()
 
-    @kb.add("enter")
-    def _enter(_: object) -> None:
-        if mode[0] == "pick_child":
-            _confirm_pick()
-            return
-        result[0] = "branch"
+    # Letter nav shortcuts — filtered to avoid consuming search/label chars.
+    @kb.add("k", filter=_in_nav)
+    def _k_nav(_: object) -> None:
+        _move(-1)
+
+    @kb.add("j", filter=_in_nav)
+    def _j_nav(_: object) -> None:
+        _move(1)
+
+    @kb.add("g", filter=_in_list)
+    def _g_nav(_: object) -> None:
+        cursor[0] = 0
+        status[0] = ""
         if app_ref[0]:
-            app_ref[0].exit()
+            app_ref[0].invalidate()
 
-    @kb.add("f")
-    def _fork_key(_: object) -> None:
-        if mode[0] == "list":
-            result[0] = "fork"
-            if app_ref[0]:
-                app_ref[0].exit()
-
-    @kb.add("b")
-    def _bkm(_: object) -> None:
-        if mode[0] == "list":
-            _toggle_bookmark()
-
-    @kb.add("B")
-    def _next_bkm(_: object) -> None:
-        if mode[0] == "list":
-            _next_bookmark()
+    @kb.add("G", filter=_in_list)
+    def _G_nav(_: object) -> None:
+        cursor[0] = max(0, len(vis_idxs()) - 1)
+        status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
 
     @kb.add("right")
-    @kb.add("l")
-    def _right(_: object) -> None:
+    def _right_arrow(_: object) -> None:
+        if mode[0] == "list":
+            _navigate_into()
+        elif mode[0] == "pick_child":
+            _confirm_pick()
+
+    @kb.add("l", filter=_in_nav)
+    def _l_nav(_: object) -> None:
         if mode[0] == "list":
             _navigate_into()
         elif mode[0] == "pick_child":
             _confirm_pick()
 
     @kb.add("left")
-    @kb.add("h")
-    def _left(_: object) -> None:
+    def _left_arrow(_: object) -> None:
+        if mode[0] == "pick_child":
+            mode[0] = "list"
+            status[0] = ""
+            if app_ref[0]:
+                app_ref[0].invalidate()
+        elif mode[0] == "list":
+            _navigate_back()
+
+    @kb.add("h", filter=_in_nav)
+    def _h_nav(_: object) -> None:
         if mode[0] == "pick_child":
             mode[0] = "list"
             status[0] = ""
@@ -988,19 +1254,126 @@ def _tree_navigator(
         else:
             _navigate_back()
 
+    @kb.add("enter")
+    def _enter(_: object) -> None:
+        if mode[0] == "pick_child":
+            _confirm_pick()
+        elif mode[0] == "search":
+            mode[0] = "list"
+            status[0] = ""
+            if app_ref[0]:
+                app_ref[0].invalidate()
+        elif mode[0] == "label":
+            _confirm_label()
+        else:
+            result[0] = "branch"
+            if app_ref[0]:
+                app_ref[0].exit()
+
+    @kb.add("f", filter=_in_list)
+    def _fork_key(_: object) -> None:
+        result[0] = "fork"
+        if app_ref[0]:
+            app_ref[0].exit()
+
+    @kb.add("b", filter=_in_list)
+    def _bkm(_: object) -> None:
+        _toggle_bookmark()
+
+    @kb.add("B", filter=_in_list)
+    def _next_bkm(_: object) -> None:
+        _next_bookmark()
+
+    @kb.add("L", filter=_in_list)
+    def _label_key(_: object) -> None:
+        _start_label_edit()
+
+    @kb.add("T", filter=_in_list)
+    def _ts_toggle(_: object) -> None:
+        show_ts[0] = not show_ts[0]
+        status[0] = f"{_TREE_DIM}timestamps {'on' if show_ts[0] else 'off'}{_TREE_RESET}"
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("c-o")
+    def _filter_cycle(_: object) -> None:
+        if mode[0] in ("list", "search"):
+            _cycle_filter()
+
+    @kb.add("c-left")
+    def _fold_key(_: object) -> None:
+        if mode[0] == "list":
+            _fold_at_cursor()
+
+    @kb.add("c-right")
+    def _unfold_key(_: object) -> None:
+        if mode[0] == "list":
+            _unfold_at_cursor()
+
+    @kb.add("/", filter=_in_list)
+    def _search_enter(_: object) -> None:
+        mode[0] = "search"
+        status[0] = ""
+        if app_ref[0]:
+            app_ref[0].invalidate()
+
+    @kb.add("backspace")
+    @kb.add("c-h")
+    def _backspace(_: object) -> None:
+        if mode[0] == "search":
+            search_query[0] = search_query[0][:-1]
+            _clamp()
+            if app_ref[0]:
+                app_ref[0].invalidate()
+        elif mode[0] == "label":
+            label_input[0] = label_input[0][:-1]
+            if app_ref[0]:
+                app_ref[0].invalidate()
+
     @kb.add("escape")
-    @kb.add("q")
     @kb.add("c-c")
-    def _cancel(_: object) -> None:
+    def _cancel_or_exit(_: object) -> None:
         if mode[0] == "pick_child":
             mode[0] = "list"
             status[0] = ""
             if app_ref[0]:
                 app_ref[0].invalidate()
+        elif mode[0] == "search":
+            search_query[0] = ""
+            mode[0] = "list"
+            _clamp()
+            if app_ref[0]:
+                app_ref[0].invalidate()
+        elif mode[0] == "label":
+            _cancel_label()
         else:
             result[0] = None
             if app_ref[0]:
                 app_ref[0].exit()
+
+    @kb.add("q", filter=_in_nav)
+    def _quit_key(_: object) -> None:
+        result[0] = None
+        if app_ref[0]:
+            app_ref[0].exit()
+
+    @kb.add("<any>")
+    def _char_input(event: "object") -> None:
+        """Catch printable characters for search and label modes."""
+        try:
+            key = event.key_sequence[0].key
+        except (AttributeError, IndexError):
+            return
+        if len(key) == 1 and key.isprintable():
+            if mode[0] == "search":
+                search_query[0] += key
+                _clamp()
+                if app_ref[0]:
+                    app_ref[0].invalidate()
+            elif mode[0] == "label":
+                label_input[0] += key
+                if app_ref[0]:
+                    app_ref[0].invalidate()
 
     # ── layout ───────────────────────────────────────────────────────────
 
@@ -1061,7 +1434,7 @@ def _tree_navigator(
 
     # ── act on the user's choice ─────────────────────────────────────────
 
-    chosen_idx = cursor[0]
+    chosen_idx = _real_idx()
     action = result[0]
 
     if action is None:
@@ -1070,7 +1443,7 @@ def _tree_navigator(
 
     # Fork from whichever session was active at exit (top of nav stack)
     target_session = _cur_session()
-    if chosen_idx >= len(target_session.messages):
+    if chosen_idx is None or chosen_idx >= len(target_session.messages):
         output_fn(f"  {_TREE_RED}✗ invalid index {chosen_idx}{_TREE_RESET}\n")
         return
 
@@ -1110,6 +1483,7 @@ def _handle_slash(
     output_fn: Callable[[str], None] | None = None,
     staged_images: list[str] | None = None,
     reset_fn: "Callable[[], None] | None" = None,
+    tools_filter: str | None = None,
 ) -> bool:
     from typing import Any
 
@@ -1501,8 +1875,13 @@ def _handle_slash(
             workspace_root=workspace,
         )
         configure_fs(workspace_root=workspace)
-        # Apply tool filtering
-        if tau_cfg.tools.enabled_only:
+        # Apply tool filtering — CLI --tools flag takes precedence
+        if tools_filter is not None:
+            requested = {t.strip() for t in tools_filter.split(",") if t.strip()}
+            for name in list(agent._registry.names()):
+                if name not in requested:
+                    agent._registry.unregister(name)
+        elif tau_cfg.tools.enabled_only:
             allowed = set(tau_cfg.tools.enabled_only)
             for name in list(agent._registry.names()):
                 if name not in allowed:
@@ -1659,6 +2038,7 @@ def _repl(
     staged_images: list[str] | None = None,
     show_thinking: bool = False,
     tau_config: "TauConfig | None" = None,
+    tools_filter: str | None = None,
 ) -> None:
     steering: SteeringChannel | None = agent._steering
     ext_context: ExtensionContext | None = None
@@ -1945,6 +2325,7 @@ def _repl(
             handled = _handle_slash(
                 text, steering, ext_registry, ext_context, agent=agent, output_fn=_append_output,
                 staged_images=_staged_images, reset_fn=_tree_reset_fn,
+                tools_filter=tools_filter,
             )
             if handled is True:
                 return
@@ -2149,6 +2530,7 @@ def run_cmd(
     max_cost: float | None,
     no_session: bool,
     trace_log: str | None,
+    tools_filter: str | None,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
     # Split args into @file tokens and plain text tokens.
@@ -2227,6 +2609,7 @@ def run_cmd(
         session_name=session_name,
         resume_id=resume_id,
         steering=steering,
+        tools_filter=tools_filter,
     )
 
     # Expand @file references in the prompt (single-shot mode)
@@ -2260,7 +2643,7 @@ def run_cmd(
     elif prompt:
         _render_events(agent, prompt, verbose, images=list(image) if image else None, ext_registry=ext_registry, show_thinking=show_thinking)
     else:
-        _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None, show_thinking=show_thinking, tau_config=tau_config)
+        _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None, show_thinking=show_thinking, tau_config=tau_config, tools_filter=tools_filter)
 
 # ---------------------------------------------------------------------------
 # `tau sessions` subcommands
