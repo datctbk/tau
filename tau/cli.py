@@ -1802,6 +1802,7 @@ def _repl(
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.formatted_text import ANSI
     from prompt_toolkit.layout import Layout, HSplit, Window, ScrollablePane, Float, FloatContainer
+    from prompt_toolkit.layout.dimension import Dimension as D
     from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
     from prompt_toolkit.layout.menus import CompletionsMenu
     from prompt_toolkit.layout.processors import BeforeInput
@@ -1865,7 +1866,7 @@ def _repl(
         f"{_BOLD}{_CYAN}tau v{_tau_version()}{_RESET}"
         f"  {_MAGENTA}{agent_config.provider}/{agent_config.model}{_RESET}"
         f"  {_DIM}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
-        + f"{_DIM}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom  ·  Esc cancel{_RESET}\n"
+        + f"{_DIM}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom  ·  Esc cancel  ·  Ctrl+J new line{_RESET}\n"
         + f"{_DIM}{'═' * 60}{_RESET}\n"
     )
     output_text_parts.append(header)
@@ -2106,6 +2107,12 @@ def _repl(
     def _enter(event: object) -> None:
         _on_enter(event)
 
+    @kb.add("c-j")
+    def _newline(event: object) -> None:
+        """Ctrl+Enter (Ctrl+J): insert a newline into the input buffer."""
+        if not agent_running.is_set() and not confirm_pending.is_set():
+            input_buffer.insert_text("\n")
+
     @kb.add("tab")
     def _tab(event: object) -> None:
         """Trigger tab completion or cycle through completions."""
@@ -2196,7 +2203,8 @@ def _repl(
             input_processors=[BeforeInput(_get_prompt_prefix)],
             focusable=True,
         ),
-        height=1,
+        height=D(min=1, max=10),
+        wrap_lines=True,
     )
 
     body = HSplit([
