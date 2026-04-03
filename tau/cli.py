@@ -15,7 +15,7 @@ from rich.prompt import Prompt
 from rich.rule import Rule
 from rich.style import Style
 from rich.text import Text
-from tau.config import TauConfig, ensure_tau_home, load_config
+from tau.config import TauConfig, ensure_tau_home, load_config, get_theme_file_paths
 from tau.core.agent import Agent
 from tau.core.context import ContextManager
 from tau.core.extension import ExtensionContext, ExtensionRegistry
@@ -87,6 +87,85 @@ class _Theme:
         cls._loaded = True
 
 theme = _Theme()
+
+
+class _ThemeWatcher:
+    """Background poller that hot-reloads the active theme when its source
+    file changes on disk.
+
+    Watches ``~/.tau/config.toml`` and, if present, ``~/.tau/theme.toml``.
+    On any mtime change the config is re-read and ``theme`` is updated in
+    place; the prompt_toolkit ``Application`` is then invalidated so the
+    new colours take effect on the very next render.
+    """
+
+    _INTERVAL = 0.5  # seconds between polls
+
+    def __init__(self, app_ref: "list[Application | None]") -> None:
+        self._app_ref = app_ref
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._mtimes: dict[str, float] = {}
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _snapshot(self) -> None:
+        """Record current mtimes of all watched paths."""
+        for p in get_theme_file_paths():
+            self._mtimes[str(p)] = self._mtime(p)
+
+    def _check(self) -> None:
+        """Poll watched paths; reload theme on any change."""
+        changed = False
+        for p in get_theme_file_paths():
+            key = str(p)
+            mtime = self._mtime(p)
+            if self._mtimes.get(key, -1.0) != mtime:
+                self._mtimes[key] = mtime
+                changed = True
+        if changed:
+            try:
+                cfg = load_config()
+                theme.load(cfg, force=True)
+            except Exception:  # noqa: BLE001
+                pass
+            app = self._app_ref[0]
+            if app is not None:
+                try:
+                    app.invalidate()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Start the background polling thread."""
+        self._stop.clear()
+        self._snapshot()
+
+        def _run() -> None:
+            while not self._stop.wait(self._INTERVAL):
+                self._check()
+
+        self._thread = threading.Thread(
+            target=_run, daemon=True, name="tau-theme-watcher"
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signal the watcher to exit (does not join the thread)."""
+        self._stop.set()
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -264,6 +343,7 @@ def _render_events(
     ext_registry: ExtensionRegistry | None = None,
     output_fn: "Callable[[str], None] | None" = None,
     show_thinking: bool = False,
+    cancel_event: "threading.Event | None" = None,
 ) -> None:
     """Render agent events. If output_fn is provided, all output is sent there
     (for TUI mode). Otherwise writes to sys.stdout / console."""
@@ -350,7 +430,16 @@ def _render_events(
         _thr.Thread(target=_spin_loop, daemon=True).start()
     _start_spinner("thinking...")
 
-    for event in agent.run(user_input, images=images):
+    gen = agent.run(user_input, images=images)
+    for event in gen:
+        # --- Escape-to-cancel ---
+        if cancel_event is not None and cancel_event.is_set():
+            _stop_spinner()
+            _flush_stream(end_line=True)
+            _write("\n⚠ Cancelled.\n")
+            if hasattr(gen, "close"):
+                gen.close()
+            break
         if ext_registry is not None:
             ext_registry.fire_hooks(event)
         if isinstance(event, TextDelta):
@@ -565,6 +654,8 @@ _SLASH_HELP = (
     "  /reload        hot-reload config, extensions, skills, context files\n"
     "  /prompt <name> [k=v …]  expand a prompt template and send it\n"
     "  /prompts       list available prompt templates\n"
+    "  /themes        list available theme presets\n"
+    "  /theme <name>  switch to a theme preset (instant, no restart)\n"
     "  /help          show this message\n"
     "  exit / Ctrl-D  quit"
 )
@@ -1587,6 +1678,43 @@ def _handle_slash(
         _tree_navigator(agent, output_fn, reset_fn=reset_fn)
         return True
 
+    if keyword == "/themes":
+        from tau.config import THEME_PRESETS
+        try:
+            active = load_config().theme.preset
+        except Exception:
+            active = ""
+        lines = []
+        for name, colors in THEME_PRESETS.items():
+            marker = " [green]◀ active[/green]" if name == active else ""
+            swatch = ""
+            for key in ("user_color", "assistant_color", "tool_color", "error_color", "accent_color"):
+                swatch += f"[{colors[key]}]██[/{colors[key]}]"
+            lines.append(f"  [{colors['accent_color']}]{name:<20}[/{colors['accent_color']}] {swatch}{marker}")
+        _print("[bold]Theme presets:[/bold]  (use [cyan]/theme <name>[/cyan] to switch)\n" + "\n".join(lines))
+        return True
+
+    if keyword == "/theme":
+        if not arg:
+            _print("[dim]  Usage: /theme <preset-name>[/dim]")
+            _print("[dim]  Use /themes to list available presets.[/dim]")
+            return True
+        from tau.config import THEME_PRESETS, THEME_PATH
+        preset_name = arg.strip()
+        if preset_name not in THEME_PRESETS:
+            _print(f"[red]  Unknown preset {preset_name!r}.[/red]  Available: {', '.join(THEME_PRESETS)}")
+            return True
+        # Write to ~/.tau/theme.toml so it persists and hot-reload picks it up
+        try:
+            THEME_PATH.parent.mkdir(parents=True, exist_ok=True)
+            THEME_PATH.write_text(f'preset = "{preset_name}"\n', encoding="utf-8")
+            cfg = load_config()
+            theme.load(cfg, force=True)
+            _print(f"[green]  ✓ Switched to [bold]{preset_name}[/bold] theme.[/green]")
+        except Exception as exc:  # noqa: BLE001
+            _print(f"[red]  Error applying theme: {exc}[/red]")
+        return True
+
     if keyword == "/prompts":
         from tau.prompts import list_templates
         ws = agent._config.workspace_root if agent else "."
@@ -1715,6 +1843,7 @@ def _repl(
 
     # -- state ---------------------------------------------------------------
     agent_running = threading.Event()
+    cancel_requested = threading.Event()
     app_ref: list[Application | None] = [None]
     output_text_parts: list[str] = []
     _staged_images = staged_images or []
@@ -1736,7 +1865,7 @@ def _repl(
         f"{_BOLD}{_CYAN}tau v{_tau_version()}{_RESET}"
         f"  {_MAGENTA}{agent_config.provider}/{agent_config.model}{_RESET}"
         f"  {_DIM}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
-        + f"{_DIM}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom{_RESET}\n"
+        + f"{_DIM}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom  ·  Esc cancel{_RESET}\n"
         + f"{_DIM}{'═' * 60}{_RESET}\n"
     )
     output_text_parts.append(header)
@@ -1869,6 +1998,7 @@ def _repl(
 
     def _run_agent(user_input: str) -> None:
         agent_running.set()
+        cancel_requested.clear()
         _spinner_idx[0] = 0
         _tick_spinner()
         if app_ref[0]:
@@ -1882,10 +2012,12 @@ def _repl(
                 ext_registry=ext_registry,
                 output_fn=_append_output,
                 show_thinking=show_thinking,
+                cancel_event=cancel_requested,
             )
         except Exception as exc:
             _append_output(f"\nError: {exc}\n")
         finally:
+            cancel_requested.clear()
             agent_running.clear()
             if _spinner_timer[0]:
                 _spinner_timer[0].cancel()
@@ -2045,6 +2177,14 @@ def _repl(
         _append_output("\nGoodbye.\n")
         app_ref[0].exit()  # type: ignore[union-attr]
 
+    @kb.add("escape")
+    def _escape(event: object) -> None:
+        """Escape: cancel the running agent stream."""
+        if agent_running.is_set():
+            cancel_requested.set()
+            if app_ref[0]:
+                app_ref[0].invalidate()
+
     # -- wire TUI confirm hook into shell module -----------------------------
     from tau.tools import shell as _shell_mod
     _shell_mod._confirm_hook = _tui_confirm
@@ -2098,7 +2238,12 @@ def _repl(
         mouse_support=False,  # disabled so the terminal can handle native text selection
     )
     app_ref[0] = application
-    application.run()
+    _theme_watcher = _ThemeWatcher(app_ref)
+    _theme_watcher.start()
+    try:
+        application.run()
+    finally:
+        _theme_watcher.stop()
 
 
 def _tau_version() -> str:
@@ -2503,6 +2648,77 @@ def sessions_export(session_id: str, fmt: str, output_file: str | None, workspac
         ))
     else:
         click.echo(content)
+
+# ---------------------------------------------------------------------------
+# `tau themes` subcommands
+# ---------------------------------------------------------------------------
+@main.group("themes")
+def themes_group() -> None:
+    """Manage and preview built-in theme presets."""
+
+
+@themes_group.command("list")
+def themes_list() -> None:
+    """List all built-in theme presets with a colour preview."""
+    from tau.config import THEME_PRESETS, THEME_PATH, ThemeConfig, load_config
+    try:
+        active_cfg = load_config()
+        active_preset = active_cfg.theme.preset
+    except Exception:
+        active_preset = ""
+
+    console.print()
+    console.print(Rule("Built-in theme presets", style="dim"))
+    console.print(
+        "[dim]  Use in [bold]~/.tau/theme.toml[/bold]:[/dim]"
+        "  [cyan]preset = \"<name>\"[/cyan]"
+    )
+    console.print()
+
+    for name, colors in THEME_PRESETS.items():
+        marker = " ◀ active" if name == active_preset else ""
+        console.print(Text.assemble(
+            ("  ", ""),
+            (f"{name:<20}", Style(color=colors["accent_color"], bold=True)),
+            (marker, Style(color="green", bold=True, dim=not marker)),
+        ))
+        # Colour swatches
+        swatch_parts: list[tuple[str, str]] = [("    ", "")]
+        for label, key in (
+            ("user", "user_color"),
+            ("assistant", "assistant_color"),
+            ("tool", "tool_color"),
+            ("error", "error_color"),
+            ("accent", "accent_color"),
+        ):
+            swatch_parts.append((f"  {label} ", "dim"))
+            swatch_parts.append(("██", colors[key]))
+        console.print(Text.assemble(*swatch_parts))
+    console.print()
+
+
+@themes_group.command("show")
+@click.argument("preset_name")
+def themes_show(preset_name: str) -> None:
+    """Show all colour values for a specific preset."""
+    from tau.config import THEME_PRESETS
+    if preset_name not in THEME_PRESETS:
+        err_console.print(
+            f"[red]Unknown preset {preset_name!r}.[/red]  "
+            f"Available: {', '.join(THEME_PRESETS)}"
+        )
+        sys.exit(1)
+    colors = THEME_PRESETS[preset_name]
+    console.print()
+    console.print(Rule(f"Theme: {preset_name}", style="dim"))
+    for field, value in colors.items():
+        console.print(Text.assemble(
+            (f"  {field:<20}", Style(dim=True)),
+            ("██  ", value),
+            (value, Style(color=value)),
+        ))
+    console.print()
+
 
 # ---------------------------------------------------------------------------
 # `tau prompts` subcommands

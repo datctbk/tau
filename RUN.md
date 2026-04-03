@@ -800,3 +800,8 @@ tau run --no-session -P "explain this error: $ERR"
 ```
 
 Uses an in-memory session manager so no files are written. Useful for scripting, CI, or quick questions where session history is unnecessary.
+
+.venv/bin/tau run -p mlx -m mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit  -w /Users/trantandat/Documents/workspace_for_ai --trace-log llm_trace.log --show-thinking
+
+
+

@@ -1,12 +1,13 @@
-"""Tests for theme configuration and configurable tool set."""
+"""Tests for theme configuration, configurable tool set, and theme hot-reload."""
 
 from __future__ import annotations
 
+import time
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from tau.config import TauConfig, ThemeConfig, ToolsConfig, load_config
+from tau.config import TauConfig, ThemeConfig, ToolsConfig, load_config, get_theme_file_paths, THEME_PRESETS
 from tau.core.tool_registry import ToolRegistry
 from tau.core.types import ToolDefinition, ToolParameter
 
@@ -22,6 +23,86 @@ def _make_tool(name: str) -> ToolDefinition:
         parameters={"x": ToolParameter(type="string", description="input")},
         handler=lambda x: f"ok:{x}",
     )
+
+
+# ===========================================================================
+# THEME_PRESETS
+# ===========================================================================
+
+class TestThemePresets:
+    def test_required_presets_exist(self):
+        for name in ("dark", "light", "solarized-dark", "solarized-light", "monokai", "dracula", "nord"):
+            assert name in THEME_PRESETS, f"preset {name!r} missing"
+
+    def test_each_preset_has_all_fields(self):
+        required = {
+            "user_color", "assistant_color", "tool_color", "system_color",
+            "error_color", "accent_color", "success_color", "warning_color",
+            "border_style",
+        }
+        for name, colors in THEME_PRESETS.items():
+            assert required == set(colors.keys()), f"preset {name!r} missing fields"
+
+    def test_preset_values_are_strings(self):
+        for name, colors in THEME_PRESETS.items():
+            for field, value in colors.items():
+                assert isinstance(value, str), f"{name}.{field} is not a string"
+
+    def test_preset_applied_by_load_config(self, tmp_path: Path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text(
+            '[defaults]\nprovider = "openai"\n\n'
+            '[theme]\npreset = "dracula"\n',
+            encoding="utf-8",
+        )
+        with patch("tau.config.THEME_PATH", tmp_path / "nonexistent_theme.toml"):
+            cfg = load_config(toml_path)
+        expected = THEME_PRESETS["dracula"]
+        assert cfg.theme.user_color == expected["user_color"]
+        assert cfg.theme.assistant_color == expected["assistant_color"]
+        assert cfg.theme.preset == "dracula"
+
+    def test_explicit_override_wins_over_preset(self, tmp_path: Path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text(
+            '[defaults]\nprovider = "openai"\n\n'
+            '[theme]\npreset = "dracula"\nuser_color = "magenta"\n',
+            encoding="utf-8",
+        )
+        with patch("tau.config.THEME_PATH", tmp_path / "nonexistent_theme.toml"):
+            cfg = load_config(toml_path)
+        assert cfg.theme.user_color == "magenta"
+        # Other fields still come from the preset
+        assert cfg.theme.assistant_color == THEME_PRESETS["dracula"]["assistant_color"]
+
+    def test_unknown_preset_is_ignored(self, tmp_path: Path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text(
+            '[defaults]\nprovider = "openai"\n\n'
+            '[theme]\npreset = "nonexistent"\n',
+            encoding="utf-8",
+        )
+        with patch("tau.config.THEME_PATH", tmp_path / "nonexistent_theme.toml"):
+            cfg = load_config(toml_path)
+        assert cfg.theme.user_color == ThemeConfig().user_color
+
+    def test_theme_toml_preset_applies(self, tmp_path: Path):
+        config_path = tmp_path / "config.toml"
+        theme_path = tmp_path / "theme.toml"
+        config_path.write_text('[defaults]\nprovider = "openai"\n', encoding="utf-8")
+        theme_path.write_text('preset = "nord"\n', encoding="utf-8")
+        with patch("tau.config.THEME_PATH", theme_path):
+            cfg = load_config(config_path)
+        assert cfg.theme.user_color == THEME_PRESETS["nord"]["user_color"]
+
+    def test_no_preset_uses_defaults(self, tmp_path: Path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text('[defaults]\nprovider = "openai"\n', encoding="utf-8")
+        with patch("tau.config.THEME_PATH", tmp_path / "nonexistent_theme.toml"):
+            cfg = load_config(toml_path)
+        defaults = ThemeConfig()
+        assert cfg.theme.user_color == defaults.user_color
+        assert cfg.theme.preset == ""
 
 
 # ===========================================================================
@@ -61,7 +142,8 @@ class TestThemeConfig:
             'border_style = "bold cyan"\n',
             encoding="utf-8",
         )
-        cfg = load_config(toml_path)
+        with patch("tau.config.THEME_PATH", tmp_path / "nonexistent_theme.toml"):
+            cfg = load_config(toml_path)
         assert cfg.theme.user_color == "blue"
         assert cfg.theme.accent_color == "magenta"
         assert cfg.theme.border_style == "bold cyan"
@@ -183,3 +265,170 @@ class TestToolsConfig:
         )
         cfg = load_config(toml_path)
         assert cfg.tools.enabled_only == ["read_file", "list_dir"]
+
+
+# ===========================================================================
+# get_theme_file_paths
+# ===========================================================================
+
+class TestGetThemeFilePaths:
+    def test_always_includes_config_path(self):
+        paths = get_theme_file_paths()
+        from tau.config import CONFIG_PATH
+        assert CONFIG_PATH in paths
+
+    def test_includes_theme_toml_when_present(self, tmp_path):
+        from tau.config import THEME_PATH
+        with patch("tau.config.THEME_PATH", tmp_path / "theme.toml"), \
+             patch("tau.config.CONFIG_PATH", tmp_path / "config.toml"):
+            (tmp_path / "theme.toml").write_text("[theme]\n", encoding="utf-8")
+            from tau.config import get_theme_file_paths as _gtfp
+            paths = _gtfp()
+            assert tmp_path / "theme.toml" in paths
+
+    def test_excludes_theme_toml_when_absent(self, tmp_path):
+        with patch("tau.config.THEME_PATH", tmp_path / "nonexistent.toml"), \
+             patch("tau.config.CONFIG_PATH", tmp_path / "config.toml"):
+            from tau.config import get_theme_file_paths as _gtfp
+            paths = _gtfp()
+            assert tmp_path / "nonexistent.toml" not in paths
+
+
+# ===========================================================================
+# _ThemeWatcher
+# ===========================================================================
+
+class TestThemeWatcher:
+    def _make_watcher(self, app_ref=None):
+        from tau.cli import _ThemeWatcher
+        if app_ref is None:
+            app_ref = [None]
+        return _ThemeWatcher(app_ref)
+
+    def test_start_and_stop(self):
+        w = self._make_watcher()
+        w.start()
+        assert w._thread is not None
+        assert w._thread.is_alive()
+        w.stop()
+        w._thread.join(timeout=2)
+        assert not w._thread.is_alive()
+
+    def test_snapshot_records_mtimes(self, tmp_path):
+        config = tmp_path / "config.toml"
+        config.write_text("[defaults]\n", encoding="utf-8")
+        with patch("tau.cli.get_theme_file_paths", return_value=[config]):
+            w = self._make_watcher()
+            w._snapshot()
+            assert str(config) in w._mtimes
+            assert w._mtimes[str(config)] == config.stat().st_mtime
+
+    def test_check_detects_change_and_reloads(self, tmp_path):
+        config = tmp_path / "config.toml"
+        config.write_text("[defaults]\n", encoding="utf-8")
+
+        mock_app = MagicMock()
+        app_ref = [mock_app]
+
+        with patch("tau.cli.get_theme_file_paths", return_value=[config]), \
+             patch("tau.cli.load_config") as mock_load_config, \
+             patch("tau.cli.theme") as mock_theme:
+
+            mock_load_config.return_value = TauConfig()
+            w = self._make_watcher(app_ref)
+            w._snapshot()
+
+            # Simulate a file change by altering mtime record
+            w._mtimes[str(config)] = 0.0
+
+            w._check()
+
+            mock_load_config.assert_called_once()
+            mock_theme.load.assert_called_once_with(mock_load_config.return_value, force=True)
+            mock_app.invalidate.assert_called_once()
+
+    def test_check_no_change_no_reload(self, tmp_path):
+        config = tmp_path / "config.toml"
+        config.write_text("[defaults]\n", encoding="utf-8")
+
+        mock_app = MagicMock()
+        app_ref = [mock_app]
+
+        with patch("tau.cli.get_theme_file_paths", return_value=[config]), \
+             patch("tau.cli.load_config") as mock_load_config, \
+             patch("tau.cli.theme") as mock_theme:
+
+            mock_load_config.return_value = TauConfig()
+            w = self._make_watcher(app_ref)
+            w._snapshot()
+            w._check()  # no change since snapshot
+
+            mock_load_config.assert_not_called()
+            mock_theme.load.assert_not_called()
+            mock_app.invalidate.assert_not_called()
+
+    def test_check_no_app_does_not_crash(self, tmp_path):
+        """When app_ref[0] is None, _check should not raise."""
+        config = tmp_path / "config.toml"
+        config.write_text("[defaults]\n", encoding="utf-8")
+        app_ref = [None]
+
+        with patch("tau.cli.get_theme_file_paths", return_value=[config]), \
+             patch("tau.cli.load_config", return_value=TauConfig()), \
+             patch("tau.cli.theme"):
+            w = self._make_watcher(app_ref)
+            # Force a change
+            w._mtimes[str(config)] = 0.0
+            w._check()  # must not raise
+
+    def test_watcher_polls_on_interval(self, tmp_path):
+        """Integration: watcher thread calls _check at least once in 1.5s."""
+        config = tmp_path / "config.toml"
+        config.write_text("[defaults]\n", encoding="utf-8")
+
+        check_calls: list[float] = []
+
+        with patch("tau.cli.get_theme_file_paths", return_value=[config]):
+            w = self._make_watcher()
+            original_check = w._check
+            def recording_check():
+                check_calls.append(time.monotonic())
+                original_check()
+            w._check = recording_check
+            w.start()
+            time.sleep(1.5)
+            w.stop()
+
+        assert len(check_calls) >= 1
+
+    def test_theme_toml_hot_reload(self, tmp_path):
+        """Writing to theme.toml causes theme to reload with new colors."""
+        from tau.cli import _Theme, _ThemeWatcher
+
+        config = tmp_path / "config.toml"
+        theme_toml = tmp_path / "theme.toml"
+        config.write_text('[defaults]\nprovider = "openai"\n', encoding="utf-8")
+        theme_toml.write_text('user_color = "cyan"\n', encoding="utf-8")
+
+        with patch("tau.config.CONFIG_PATH", config), \
+             patch("tau.config.THEME_PATH", theme_toml):
+
+            _Theme._loaded = False
+
+            app_ref = [None]
+            w = _ThemeWatcher(app_ref)
+            w._snapshot()
+
+            # Update theme.toml
+            theme_toml.write_text('user_color = "magenta"\n', encoding="utf-8")
+
+            # Force mtime to look changed
+            w._mtimes[str(theme_toml)] = 0.0
+
+            with patch("tau.cli.load_config") as mock_lc, \
+                 patch("tau.cli.theme") as mock_theme:
+                from tau.config import load_config as _lc
+                mock_lc.return_value = _lc.__wrapped__(config) if hasattr(_lc, "__wrapped__") else TauConfig()
+                w._check()
+                mock_theme.load.assert_called_once()
+

@@ -132,6 +132,7 @@ BUILTIN_SLASH_COMMANDS = [
     "help", "queue", "steer", "clear", "compact",
     "model", "think", "tokens", "tree", "fork", "bookmark", "image",
     "copy", "export", "share", "import", "reload", "prompt", "prompts",
+    "theme", "themes",
 ]
 
 

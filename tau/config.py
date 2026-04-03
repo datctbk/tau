@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 TAU_HOME = Path.home() / ".tau"
 CONFIG_PATH = TAU_HOME / "config.toml"
+THEME_PATH = TAU_HOME / "theme.toml"   # optional dedicated theme file
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +88,96 @@ class ExtensionsConfig(BaseSettings):
     disabled: list[str] = []
 
 
+# ---------------------------------------------------------------------------
+# Built-in theme presets
+# ---------------------------------------------------------------------------
+
+#: Map of preset name → dict of ThemeConfig field overrides.
+THEME_PRESETS: dict[str, dict[str, str]] = {
+    "dark": {
+        "user_color": "cyan",
+        "assistant_color": "green",
+        "tool_color": "yellow",
+        "system_color": "dim",
+        "error_color": "red",
+        "accent_color": "cyan",
+        "success_color": "green",
+        "warning_color": "yellow",
+        "border_style": "dim",
+    },
+    "light": {
+        "user_color": "blue",
+        "assistant_color": "dark_green",
+        "tool_color": "dark_orange",
+        "system_color": "grey50",
+        "error_color": "dark_red",
+        "accent_color": "blue",
+        "success_color": "dark_green",
+        "warning_color": "dark_orange",
+        "border_style": "grey50",
+    },
+    "solarized-dark": {
+        "user_color": "#268bd2",
+        "assistant_color": "#859900",
+        "tool_color": "#b58900",
+        "system_color": "#586e75",
+        "error_color": "#dc322f",
+        "accent_color": "#2aa198",
+        "success_color": "#859900",
+        "warning_color": "#cb4b16",
+        "border_style": "#073642",
+    },
+    "solarized-light": {
+        "user_color": "#268bd2",
+        "assistant_color": "#859900",
+        "tool_color": "#b58900",
+        "system_color": "#93a1a1",
+        "error_color": "#dc322f",
+        "accent_color": "#2aa198",
+        "success_color": "#859900",
+        "warning_color": "#cb4b16",
+        "border_style": "#eee8d5",
+    },
+    "monokai": {
+        "user_color": "#66d9e8",
+        "assistant_color": "#a9dc76",
+        "tool_color": "#ffd866",
+        "system_color": "#727072",
+        "error_color": "#ff6188",
+        "accent_color": "#ab9df2",
+        "success_color": "#a9dc76",
+        "warning_color": "#fc9867",
+        "border_style": "#403e41",
+    },
+    "dracula": {
+        "user_color": "#8be9fd",
+        "assistant_color": "#50fa7b",
+        "tool_color": "#f1fa8c",
+        "system_color": "#6272a4",
+        "error_color": "#ff5555",
+        "accent_color": "#bd93f9",
+        "success_color": "#50fa7b",
+        "warning_color": "#ffb86c",
+        "border_style": "#44475a",
+    },
+    "nord": {
+        "user_color": "#88c0d0",
+        "assistant_color": "#a3be8c",
+        "tool_color": "#ebcb8b",
+        "system_color": "#4c566a",
+        "error_color": "#bf616a",
+        "accent_color": "#81a1c1",
+        "success_color": "#a3be8c",
+        "warning_color": "#d08770",
+        "border_style": "#3b4252",
+    },
+}
+
+
 class ThemeConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TAU_THEME_")
+    # Optional preset name — applied before individual color overrides.
+    preset: str = ""
     # Role colours (Rich markup names)
     user_color: str = "cyan"
     assistant_color: str = "green"
@@ -223,6 +312,21 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
         init["thinking_budgets"] = raw["thinking_budgets"]
     if "theme" in raw:
         init["theme"] = raw["theme"]
+    # Dedicated ~/.tau/theme.toml overlays the [theme] section in config.toml.
+    # Useful for hot-reloading themes without touching the main config.
+    theme_raw = _load_toml(THEME_PATH)
+    if theme_raw:
+        init["theme"] = {**init.get("theme", {}), **theme_raw}
+    # Apply preset: preset values are the base; explicit keys override them.
+    theme_dict = init.get("theme", {})
+    preset_name = theme_dict.get("preset", "")
+    if preset_name:
+        if preset_name not in THEME_PRESETS:
+            logger.warning("Unknown theme preset %r — ignoring. Available: %s",
+                           preset_name, ", ".join(THEME_PRESETS))
+        else:
+            # Preset supplies defaults; any explicit key in theme_dict wins.
+            init["theme"] = {**THEME_PRESETS[preset_name], **theme_dict}
     # [tools] section (note: [tools.shell] already handled above via raw["tools"]["shell"])
     tools_section = raw.get("tools", {})
     tool_disabled = tools_section.get("disabled", [])
@@ -234,6 +338,14 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
     if "parallel_tools_max_workers" in raw:
         init["parallel_tools_max_workers"] = raw["parallel_tools_max_workers"]
     return TauConfig(**init)
+
+
+def get_theme_file_paths() -> list[Path]:
+    """Return paths that affect the active theme (for hot-reload watchers)."""
+    paths = [CONFIG_PATH]
+    if THEME_PATH.exists():
+        paths.append(THEME_PATH)
+    return paths
 
 
 def ensure_tau_home() -> None:
