@@ -128,6 +128,11 @@ def _fake_agent_run(events):
     """Return a mock Agent whose .run() yields the given events."""
     agent = MagicMock()
     agent.run.return_value = iter(events)
+    agent._session.cumulative_usage = {
+        "input_tokens": 0, "output_tokens": 0,
+        "cache_read_tokens": 0, "cache_write_tokens": 0,
+    }
+    agent._config.model = "test-model"
     return agent
 
 
@@ -206,3 +211,107 @@ class TestJsonMode:
             assert exc_info.value.code == 1
         line = json.loads(captured.getvalue().strip())
         assert line["type"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Cancel-event tests for _render_events
+# ---------------------------------------------------------------------------
+
+class TestCancelEvent:
+    """Pressing Escape sets a cancel_event that _render_events checks."""
+
+    def test_cancel_stops_after_first_event(self):
+        """When cancel_event is already set, _render_events breaks after the
+        first event and outputs the Cancelled message."""
+        import threading
+        from tau.cli import _render_events
+
+        events = [
+            TextDelta(text="Hello"),
+            TextDelta(text=" world"),
+            TurnComplete(usage=TokenUsage()),
+        ]
+        agent = _fake_agent_run(events)
+        cancel = threading.Event()
+        cancel.set()  # pre-set — simulates Escape pressed before first event
+
+        captured: list[str] = []
+        _render_events(
+            agent, "test prompt",
+            output_fn=captured.append,
+            cancel_event=cancel,
+        )
+        output = "".join(captured)
+        assert "Cancelled" in output
+        # Should NOT contain the full streamed text
+        assert "world" not in output
+
+    def test_no_cancel_renders_fully(self):
+        """Without cancel_event set, all events render normally."""
+        import threading
+        from tau.cli import _render_events
+
+        events = [
+            TextDelta(text="abc"),
+            TurnComplete(usage=TokenUsage()),
+        ]
+        agent = _fake_agent_run(events)
+        cancel = threading.Event()  # NOT set
+
+        captured: list[str] = []
+        _render_events(
+            agent, "test prompt",
+            output_fn=captured.append,
+            cancel_event=cancel,
+        )
+        output = "".join(captured)
+        assert "abc" in output
+        assert "Cancelled" not in output
+
+    def test_cancel_mid_stream(self):
+        """Simulates cancel being set after the first delta."""
+        import threading
+        from tau.cli import _render_events
+
+        cancel = threading.Event()
+
+        def _events():
+            yield TextDelta(text="first")
+            cancel.set()  # cancel after first delta
+            yield TextDelta(text="second")
+            yield TurnComplete(usage=TokenUsage())
+
+        agent = MagicMock()
+        agent.run.return_value = _events()
+
+        captured: list[str] = []
+        _render_events(
+            agent, "test prompt",
+            output_fn=captured.append,
+            cancel_event=cancel,
+        )
+        output = "".join(captured)
+        assert "first" in output
+        assert "Cancelled" in output
+        # "second" may or may not appear depending on timing, but
+        # TurnComplete should NOT
+        assert "tokens:" not in output
+
+    def test_cancel_none_is_safe(self):
+        """cancel_event=None (default) works without errors."""
+        from tau.cli import _render_events
+
+        events = [
+            TextDelta(text="ok"),
+            TurnComplete(usage=TokenUsage()),
+        ]
+        agent = _fake_agent_run(events)
+
+        captured: list[str] = []
+        _render_events(
+            agent, "test prompt",
+            output_fn=captured.append,
+            cancel_event=None,
+        )
+        output = "".join(captured)
+        assert "ok" in output

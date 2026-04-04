@@ -84,6 +84,11 @@ def list_dir(path: str = ".") -> str:
 
 def search_files(pattern: str, path: str = ".", use_regex: bool = False) -> str:
     root = _resolve(path)
+    if use_regex:
+        try:
+            compiled = re.compile(pattern)
+        except re.error as exc:
+            return f"Invalid regex: {exc}"
     matches: list[str] = []
     for dirpath, _, filenames in os.walk(root):
         for fname in filenames:
@@ -93,7 +98,7 @@ def search_files(pattern: str, path: str = ".", use_regex: bool = False) -> str:
             except OSError:
                 continue
             for i, line in enumerate(text.splitlines(), 1):
-                hit = bool(re.search(pattern, line)) if use_regex else (pattern in line)
+                hit = bool(compiled.search(line)) if use_regex else (pattern in line)
                 if hit:
                     matches.append(f"{fpath.relative_to(root)}:{i}: {line.strip()}")
     return "\n".join(matches[:200]) if matches else "No matches found."
@@ -116,7 +121,10 @@ def grep(
         return f"Invalid regex: {exc}"
 
     matches: list[str] = []
-    include_pat = re.compile(include) if include else None
+    try:
+        include_pat = re.compile(include) if include else None
+    except re.error as exc:
+        return f"Invalid include regex: {exc}"
 
     targets: list[Path] = []
     if root.is_file():
@@ -154,7 +162,10 @@ def find(
 ) -> str:
     """Find files or directories by name pattern and/or type."""
     root = _resolve(path)
-    name_pat = re.compile(name) if name else None
+    try:
+        name_pat = re.compile(name) if name else None
+    except re.error as exc:
+        return f"Invalid name regex: {exc}"
     results: list[str] = []
 
     def _walk(cur: Path, depth: int) -> None:

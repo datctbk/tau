@@ -709,3 +709,53 @@ class TestSlashReload:
     def test_reload_in_builtin_commands(self):
         from tau.editor import BUILTIN_SLASH_COMMANDS
         assert "reload" in BUILTIN_SLASH_COMMANDS
+
+
+# ===========================================================================
+# /themes  &  /theme <name>
+# ===========================================================================
+
+class TestSlashThemes:
+    def test_themes_returns_true(self):
+        handled, _ = _call("/themes")
+        assert handled is True
+
+    def test_themes_lists_presets(self):
+        from tau.config import THEME_PRESETS
+        handled, prints = _call("/themes")
+        output = "\n".join(str(p) for p in prints)
+        for name in THEME_PRESETS:
+            assert name in output
+
+    def test_themes_in_help_text(self):
+        handled, prints = _call("/help")
+        panel = prints[0]
+        assert "/themes" in str(panel.renderable)
+
+    def test_theme_no_arg_shows_usage(self):
+        handled, prints = _call("/theme")
+        assert handled is True
+        assert any("Usage" in str(p) for p in prints)
+
+    def test_theme_unknown_preset_shows_error(self):
+        handled, prints = _call("/theme bogus_preset_xyz")
+        assert handled is True
+        assert any("Unknown preset" in str(p) for p in prints)
+
+    def test_theme_switch_applies(self, tmp_path):
+        """Switching to a known preset writes theme.toml and reloads."""
+        theme_toml = tmp_path / "theme.toml"
+        with patch("tau.config.THEME_PATH", theme_toml), \
+             patch("tau.config.CONFIG_PATH", tmp_path / "config.toml"):
+            (tmp_path / "config.toml").write_text('[defaults]\nprovider = "openai"\n', encoding="utf-8")
+            handled, prints = _call("/theme dracula")
+            assert handled is True
+            assert any("dracula" in str(p) for p in prints)
+            assert theme_toml.exists()
+            contents = theme_toml.read_text(encoding="utf-8")
+            assert 'preset = "dracula"' in contents
+
+    def test_theme_in_help_text(self):
+        handled, prints = _call("/help")
+        panel = prints[0]
+        assert "/theme" in str(panel.renderable)
