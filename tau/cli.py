@@ -477,11 +477,13 @@ def _render_events(
         if was_active:
             _spin_active.set()
 
-    # Inject safe print into extension contexts
+    # Inject safe print and spinner controls into extension contexts
     if ext_registry is not None:
         ctx = getattr(ext_registry, "_ext_context", None)
         if ctx is not None:
             ctx._console_print = _ext_safe_print
+            ctx._pause_spinner = _stop_spinner
+            ctx._resume_spinner = lambda: _start_spinner("running...")
 
     if output_fn is None:
         _thr.Thread(target=_spin_loop, daemon=True).start()

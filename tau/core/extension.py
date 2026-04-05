@@ -119,6 +119,8 @@ class ExtensionContext:
         self._steering = steering
         self._console_print = console_print
         self._agent_config = agent_config
+        self._pause_spinner: Callable[[], None] | None = None
+        self._resume_spinner: Callable[[], None] | None = None
 
     # --- tool registry ---
 
@@ -149,6 +151,16 @@ class ExtensionContext:
                 self._console_print(text)
         else:
             self._console_print(text)
+
+    def pause_spinner(self) -> None:
+        """Pause the CLI spinner (no-op if not wired)."""
+        if self._pause_spinner is not None:
+            self._pause_spinner()
+
+    def resume_spinner(self) -> None:
+        """Resume the CLI spinner (no-op if not wired)."""
+        if self._resume_spinner is not None:
+            self._resume_spinner()
 
     # --- context inspection ---
 
