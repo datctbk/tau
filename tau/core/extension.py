@@ -137,20 +137,22 @@ class ExtensionContext:
         if self._steering is not None:
             self._steering.enqueue(message)
 
-    def print(self, text: str, **kwargs: Any) -> None:
-        """Print to the REPL console (rich markup supported).
+    def print(self, content: Any, **kwargs: Any) -> None:
+        """Print to the REPL console (rich markup / renderables supported).
+
+        *content* may be a plain string (with Rich markup) or any Rich
+        renderable such as ``Panel``, ``Markdown``, ``Table``, etc.
 
         Extra *kwargs* (e.g. ``end=""``) are forwarded to the
         underlying console callback when it accepts them.
         """
         if kwargs:
             try:
-                self._console_print(text, **kwargs)
+                self._console_print(content, **kwargs)
             except TypeError:
-                # Fallback if the callback doesn't accept kwargs
-                self._console_print(text)
+                self._console_print(content)
         else:
-            self._console_print(text)
+            self._console_print(content)
 
     def pause_spinner(self) -> None:
         """Pause the CLI spinner (no-op if not wired)."""
