@@ -135,9 +135,20 @@ class ExtensionContext:
         if self._steering is not None:
             self._steering.enqueue(message)
 
-    def print(self, text: str) -> None:
-        """Print to the REPL console (rich markup supported)."""
-        self._console_print(text)
+    def print(self, text: str, **kwargs: Any) -> None:
+        """Print to the REPL console (rich markup supported).
+
+        Extra *kwargs* (e.g. ``end=""``) are forwarded to the
+        underlying console callback when it accepts them.
+        """
+        if kwargs:
+            try:
+                self._console_print(text, **kwargs)
+            except TypeError:
+                # Fallback if the callback doesn't accept kwargs
+                self._console_print(text)
+        else:
+            self._console_print(text)
 
     # --- context inspection ---
 

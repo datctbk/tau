@@ -9,3 +9,6 @@ tests/__pycache__/
 llm_trace.log
 llm_trace.log
 llm_trace.log
+tau/extensions/__pycache__/pretty_json.cpython-312.pyc
+tau/extensions/__pycache__/pretty_json.cpython-312.pyc
+tau/extensions/__pycache__/word_count.cpython-312.pyc
