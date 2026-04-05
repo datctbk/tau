@@ -70,17 +70,41 @@ class MLXProvider:
             return _cached[self._model_name]
 
         logger.info("MLX: loading model %s …", self._model_name)
-        if self._use_vlm:
-            from mlx_vlm import load
-            model, processor = load(self._model_name)
-            self._ensure_chat_template(processor, model)
-            _cached[self._model_name] = (model, processor)
-            return model, processor
-        else:
-            from mlx_lm import load
-            model, tokenizer = load(self._model_name)
-            _cached[self._model_name] = (model, tokenizer)
-            return model, tokenizer
+        import io, os, sys
+        # Suppress all tqdm / huggingface_hub progress bars that leave
+        # ghost lines on the interactive terminal.
+        _env_save = {}
+        for key in ("HF_HUB_DISABLE_PROGRESS_BARS", "TQDM_DISABLE"):
+            _env_save[key] = os.environ.get(key)
+            os.environ[key] = "1"
+        # Redirect stderr to swallow any residual progress output
+        _real_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            if self._use_vlm:
+                from mlx_vlm import load
+                model, processor = load(self._model_name)
+                self._ensure_chat_template(processor, model)
+                _cached[self._model_name] = (model, processor)
+                return model, processor
+            else:
+                from mlx_lm import load
+                model, tokenizer = load(self._model_name)
+                _cached[self._model_name] = (model, tokenizer)
+                return model, tokenizer
+        finally:
+            sys.stderr = _real_stderr
+            for key, old_val in _env_save.items():
+                if old_val is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old_val
+            # Clear any leftover line on stdout
+            try:
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+            except Exception:
+                pass
 
     def _get_tokenizer(self) -> Any:
         """Return the actual tokenizer for apply_chat_template / encode.
