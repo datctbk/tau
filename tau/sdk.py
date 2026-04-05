@@ -363,6 +363,7 @@ def create_session(
             context=context,
             steering=steering,
             console_print=lambda msg: logger.debug("ext: %s", msg),
+            agent_config=config,
         )
 
     # Resume or create session

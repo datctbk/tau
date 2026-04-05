@@ -112,11 +112,13 @@ class ExtensionContext:
         context: "ContextManager",
         steering: "SteeringChannel | None",
         console_print: Callable[[str], None],
+        agent_config: "AgentConfig | None" = None,
     ) -> None:
         self._registry = registry
         self._context = context
         self._steering = steering
         self._console_print = console_print
+        self._agent_config = agent_config
 
     # --- tool registry ---
 
@@ -141,6 +143,65 @@ class ExtensionContext:
 
     def token_count(self) -> int:
         return self._context.token_count()
+
+    # --- sub-agent spawning ---
+
+    def create_sub_session(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        workspace: str | None = None,
+        session_name: str | None = None,
+        max_turns: int | None = None,
+        load_skills: bool = False,
+        load_extensions: bool = False,
+        load_context_files: bool = False,
+        shell_confirm: bool = False,
+    ) -> Any:
+        """Spawn a child agent session for sub-agent tools.
+
+        By default inherits the parent's provider, model, and workspace.
+        Override any parameter to customise the child agent.
+
+        Returns a ``TauSession`` (from ``tau.sdk``) ready for
+        ``prompt()`` / ``prompt_sync()`` calls.  Use as a context
+        manager for automatic cleanup::
+
+            with ext_context.create_sub_session(
+                system_prompt="You are a research assistant."
+            ) as sub:
+                events = sub.prompt_sync("Find all TODO comments")
+        """
+        from tau.sdk import create_session
+        from tau.core.types import AgentConfig
+
+        # Build child config inheriting from parent where not overridden
+        parent = self._agent_config
+        child_kwargs: dict[str, Any] = {
+            "in_memory": True,
+            "load_skills": load_skills,
+            "load_extensions": load_extensions,
+            "load_context_files": load_context_files,
+            "shell_confirm": shell_confirm,
+        }
+
+        child_kwargs["provider"] = provider or (parent.provider if parent else None)
+        child_kwargs["model"] = model or (parent.model if parent else None)
+        child_kwargs["workspace"] = workspace or (parent.workspace_root if parent else ".")
+
+        if system_prompt is not None:
+            child_kwargs["system_prompt"] = system_prompt
+        if session_name is not None:
+            child_kwargs["session_name"] = session_name
+
+        if max_turns is not None:
+            config = AgentConfig()
+            config.max_turns = max_turns
+            child_kwargs["config"] = config
+
+        return create_session(**child_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -198,12 +259,13 @@ class ExtensionRegistry:
         context: "ContextManager",
         steering: "SteeringChannel | None",
         console_print: Callable[[str], None],
+        agent_config: "AgentConfig | None" = None,
     ) -> list[str]:
         """
         Discover and load all extensions.  Returns list of loaded names.
         Errors are logged as warnings; bad extensions are skipped.
         """
-        ext_context = ExtensionContext(registry, context, steering, console_print)
+        ext_context = ExtensionContext(registry, context, steering, console_print, agent_config=agent_config)
         loaded: list[str] = []
 
         seen: set[str] = set()
@@ -334,6 +396,7 @@ class ExtensionRegistry:
         steering: "SteeringChannel | None",
         console_print: Callable[[str], None],
         disabled: list[str] | None = None,
+        agent_config: "AgentConfig | None" = None,
     ) -> list[str]:
         """Unload all extensions, clear cached modules, and re-discover from disk."""
         for ext in self._extensions.values():
@@ -349,7 +412,7 @@ class ExtensionRegistry:
         self._hooks.clear()
         if disabled is not None:
             self._disabled = set(disabled)
-        return self.load_all(registry, context, steering, console_print)
+        return self.load_all(registry, context, steering, console_print, agent_config=agent_config)
 
     def handle_slash(self, raw_input: str, ext_context: ExtensionContext) -> bool:
         """

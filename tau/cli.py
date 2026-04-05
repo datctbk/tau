@@ -305,6 +305,7 @@ def _build_agent(
         context=context,
         steering=steering,
         console_print=console.print,
+        agent_config=agent_config,
     )
     if resume_id:
         session = session_manager.load(resume_id)
@@ -2012,6 +2013,7 @@ def _handle_slash(
                 steering=steering,
                 console_print=console.print,
                 disabled=tau_cfg.extensions.disabled,
+                agent_config=agent._config,
             )
             reloaded.append(f"extensions ({len(names)})")
 
