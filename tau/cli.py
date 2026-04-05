@@ -431,13 +431,16 @@ def _render_events(
     _spin_active = _thr.Event()   # set = spinning, clear = paused
     _spin_exit = _thr.Event()     # set = thread should terminate
     _spin_msg = ["thinking..."]
+    _spin_lock = _thr.Lock()      # prevents spinner/extension output interleaving
 
     def _spin_loop() -> None:
         idx = 0
         while not _spin_exit.is_set():
             if _spin_active.is_set():
-                sys.stdout.write(f"\r  {_SPIN[idx % len(_SPIN)]} {_spin_msg[0]}")
-                sys.stdout.flush()
+                with _spin_lock:
+                    if _spin_active.is_set():  # re-check under lock
+                        sys.stdout.write(f"\r  {_SPIN[idx % len(_SPIN)]} {_spin_msg[0]}")
+                        sys.stdout.flush()
                 idx += 1
             _spin_exit.wait(0.08)
         sys.stdout.write("\r" + " " * 30 + "\r")
@@ -453,12 +456,32 @@ def _render_events(
         if _spin_active.is_set():
             _spin_active.clear()
             if output_fn is None:
-                sys.stdout.write("\r" + " " * 30 + "\r")
-                sys.stdout.flush()
+                with _spin_lock:
+                    sys.stdout.write("\r" + " " * 30 + "\r")
+                    sys.stdout.flush()
 
     def _kill_spinner() -> None:
         _spin_active.clear()
         _spin_exit.set()
+
+    # Wrap console.print for extensions: pause spinner while printing
+    def _ext_safe_print(*args, **kwargs):
+        was_active = _spin_active.is_set()
+        if was_active:
+            _spin_active.clear()
+        with _spin_lock:
+            if was_active and output_fn is None:
+                sys.stdout.write("\r" + " " * 30 + "\r")
+                sys.stdout.flush()
+            console.print(*args, **kwargs)
+        if was_active:
+            _spin_active.set()
+
+    # Inject safe print into extension contexts
+    if ext_registry is not None:
+        ctx = getattr(ext_registry, "_ext_context", None)
+        if ctx is not None:
+            ctx._console_print = _ext_safe_print
 
     if output_fn is None:
         _thr.Thread(target=_spin_loop, daemon=True).start()

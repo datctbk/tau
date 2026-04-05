@@ -16,8 +16,9 @@ class ToolNotFoundError(Exception):
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, max_result_chars: int = 0) -> None:
         self._tools: dict[str, ToolDefinition] = {}
+        self._max_result_chars = max_result_chars  # 0 = unlimited
 
     # ------------------------------------------------------------------
     # Registration
@@ -89,6 +90,11 @@ class ToolRegistry:
                     )
             raw: Any = tool.handler(**filtered)
             content = raw if isinstance(raw, str) else str(raw)
+            if self._max_result_chars > 0 and len(content) > self._max_result_chars:
+                content = content[:self._max_result_chars] + (
+                    f"\n\n... (truncated — {len(content):,} chars total, "
+                    f"showing first {self._max_result_chars:,})"
+                )
             return ToolResult(tool_call_id=call.id, content=content, is_error=False)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Tool %r raised an error.", call.name)

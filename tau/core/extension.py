@@ -171,6 +171,7 @@ class ExtensionContext:
         load_context_files: bool = False,
         shell_confirm: bool = False,
         allowed_tools: list[str] | None = None,
+        max_tool_result_chars: int = 0,
     ) -> Any:
         """Spawn a child agent session for sub-agent tools.
 
@@ -215,6 +216,9 @@ class ExtensionContext:
 
         if allowed_tools is not None:
             child_kwargs["allowed_tools"] = allowed_tools
+
+        if max_tool_result_chars > 0:
+            child_kwargs["max_tool_result_chars"] = max_tool_result_chars
 
         return create_session(**child_kwargs)
 
@@ -280,7 +284,11 @@ class ExtensionRegistry:
         Discover and load all extensions.  Returns list of loaded names.
         Errors are logged as warnings; bad extensions are skipped.
         """
-        ext_context = ExtensionContext(registry, context, steering, console_print, agent_config=agent_config)
+        ext_context = ExtensionContext(
+            registry, context, steering, console_print,
+            agent_config=agent_config,
+        )
+        self._ext_context = ext_context  # keep reference for CLI patching
         loaded: list[str] = []
 
         seen: set[str] = set()

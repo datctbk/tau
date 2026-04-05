@@ -247,6 +247,7 @@ def create_session(
     load_context_files: bool = True,
     shell_confirm: bool = False,
     allowed_tools: list[str] | None = None,
+    max_tool_result_chars: int = 0,
 ) -> TauSession:
     """Create a ready-to-use TauSession.
 
@@ -315,7 +316,7 @@ def create_session(
     steering = SteeringChannel()
 
     # Tool registry
-    registry = ToolRegistry()
+    registry = ToolRegistry(max_result_chars=max_tool_result_chars)
     register_builtin_tools(registry)
     if allowed_tools is not None:
         registry.keep_only(allowed_tools)
