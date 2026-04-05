@@ -351,6 +351,9 @@ class PackageManager:
     def remove(self, name: str) -> None:
         """Remove a package by name."""
         manifest = self._load_manifest()
+        # Normalise: convert hyphens to underscores and lowercase, matching
+        # how names are derived during install via _name_from_url.
+        name = name.replace("-", "_").lower()
         if name not in manifest:
             raise PackageNotFoundError(f"Package {name!r} is not installed.")
 
