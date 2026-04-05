@@ -3297,7 +3297,6 @@ def extensions_install(source: str) -> None:
 
 @extensions_group.command("remove")
 @click.argument("name")
-@click.argument("name")
 @click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation.")
 def extensions_remove(name: str, yes: bool) -> None:
     """Remove an installed extension package by name."""
