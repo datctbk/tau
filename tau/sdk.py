@@ -246,6 +246,7 @@ def create_session(
     load_extensions: bool = True,
     load_context_files: bool = True,
     shell_confirm: bool = False,
+    allowed_tools: list[str] | None = None,
 ) -> TauSession:
     """Create a ready-to-use TauSession.
 
@@ -316,6 +317,8 @@ def create_session(
     # Tool registry
     registry = ToolRegistry()
     register_builtin_tools(registry)
+    if allowed_tools is not None:
+        registry.keep_only(allowed_tools)
     configure_shell(
         require_confirmation=tau_config.shell.require_confirmation,
         timeout=tau_config.shell.timeout,

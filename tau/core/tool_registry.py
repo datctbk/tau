@@ -37,6 +37,10 @@ class ToolRegistry:
         """Remove a tool by name (no-op if not registered)."""
         self._tools.pop(name, None)
 
+    def keep_only(self, names: list[str]) -> None:
+        """Keep only the named tools, remove everything else."""
+        self._tools = {k: v for k, v in self._tools.items() if k in names}
+
     # ------------------------------------------------------------------
     # Lookup
     # ------------------------------------------------------------------

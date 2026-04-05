@@ -170,6 +170,7 @@ class ExtensionContext:
         load_extensions: bool = False,
         load_context_files: bool = False,
         shell_confirm: bool = False,
+        allowed_tools: list[str] | None = None,
     ) -> Any:
         """Spawn a child agent session for sub-agent tools.
 
@@ -211,6 +212,9 @@ class ExtensionContext:
             config = AgentConfig()
             config.max_turns = max_turns
             child_kwargs["config"] = config
+
+        if allowed_tools is not None:
+            child_kwargs["allowed_tools"] = allowed_tools
 
         return create_session(**child_kwargs)
 
