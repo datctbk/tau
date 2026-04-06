@@ -121,7 +121,7 @@ class ExtensionContext:
         self._agent_config = agent_config
         self._pause_spinner: Callable[[], None] | None = None
         self._resume_spinner: Callable[[], None] | None = None
-        self._set_spinner: Callable[[str], None] | None = None
+        self._set_spinner: Callable[..., None] | None = None
 
     # --- tool registry ---
 
@@ -165,10 +165,15 @@ class ExtensionContext:
         if self._resume_spinner is not None:
             self._resume_spinner()
 
-    def set_spinner(self, msg: str) -> None:
-        """Update the spinner message (no-op if not wired)."""
+    def set_spinner(self, msg: str, key: str = "_default") -> None:
+        """Update the spinner message (no-op if not wired).
+
+        *key* identifies the source so multiple concurrent agents
+        can each show their own status line without clobbering.
+        Pass an empty *msg* to remove the status for *key*.
+        """
         if self._set_spinner is not None:
-            self._set_spinner(msg)
+            self._set_spinner(msg, key=key)
 
     # --- context inspection ---
 

@@ -47,9 +47,9 @@ console = Console()
 err_console = Console(stderr=True)
 _stream_console = Console(highlight=False, markup=False, soft_wrap=True)
 
-# Shared mutable status slot for sub-agent progress.
-# Written by extensions via set_spinner(); read by REPL footer and stdout spinner.
-_ext_status = [""]
+# Shared mutable status slots for sub-agent progress (supports multiple concurrent agents).
+# Written by extensions via set_spinner(msg, key); read by REPL output area and stdout spinner.
+_ext_status: dict[str, str] = {}  # key → status message
 _ext_status_app = [None]  # REPL sets this to app_ref[0] for invalidation
 
 
@@ -482,10 +482,13 @@ def _render_events(
         _spin_active.clear()
         _spin_exit.set()
 
-    def _set_spin_msg(msg: str) -> None:
+    def _set_spin_msg(msg: str, key: str = "_default") -> None:
         _spin_msg[0] = msg
-        # Also update the shared status for REPL footer
-        _ext_status[0] = msg
+        # Also update the shared status for REPL output area
+        if msg:
+            _ext_status[key] = msg
+        else:
+            _ext_status.pop(key, None)
         if _ext_status_app[0]:
             _ext_status_app[0].invalidate()
 
@@ -2334,9 +2337,9 @@ def _repl(
     def _get_output_text() -> ANSI:
         with _output_lock:
             joined = "".join(output_text_parts)
-        status = _ext_status[0]
-        if status:
-            joined += f"\n  \033[33m⏳ {status}\033[0m"
+        if _ext_status:
+            for _st_msg in _ext_status.values():
+                joined += f"\n  \033[2m⏳ {_st_msg}\033[0m"
         ansi = ANSI(joined)
         # Count actual fragment lines so _get_cursor_position stays in bounds.
         from prompt_toolkit.formatted_text import to_formatted_text
