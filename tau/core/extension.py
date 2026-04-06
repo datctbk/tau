@@ -121,6 +121,7 @@ class ExtensionContext:
         self._agent_config = agent_config
         self._pause_spinner: Callable[[], None] | None = None
         self._resume_spinner: Callable[[], None] | None = None
+        self._set_spinner: Callable[[str], None] | None = None
 
     # --- tool registry ---
 
@@ -163,6 +164,11 @@ class ExtensionContext:
         """Resume the CLI spinner (no-op if not wired)."""
         if self._resume_spinner is not None:
             self._resume_spinner()
+
+    def set_spinner(self, msg: str) -> None:
+        """Update the spinner message (no-op if not wired)."""
+        if self._set_spinner is not None:
+            self._set_spinner(msg)
 
     # --- context inspection ---
 

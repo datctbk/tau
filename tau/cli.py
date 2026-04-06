@@ -47,6 +47,11 @@ console = Console()
 err_console = Console(stderr=True)
 _stream_console = Console(highlight=False, markup=False, soft_wrap=True)
 
+# Shared mutable status slot for sub-agent progress.
+# Written by extensions via set_spinner(); read by REPL footer and stdout spinner.
+_ext_status = [""]
+_ext_status_app = [None]  # REPL sets this to app_ref[0] for invalidation
+
 
 # ---------------------------------------------------------------------------
 # Theme — centralised colours loaded from config
@@ -427,6 +432,14 @@ def _render_events(
     # Single long-lived thread; pause/resume via _spin_active event to avoid
     # race conditions when starting a new spinner immediately after stopping.
     import threading as _thr
+    import shutil as _shutil
+
+    def _get_term_width() -> int:
+        try:
+            return _shutil.get_terminal_size().columns
+        except Exception:
+            return 80
+
     _SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _spin_active = _thr.Event()   # set = spinning, clear = paused
     _spin_exit = _thr.Event()     # set = thread should terminate
@@ -439,11 +452,16 @@ def _render_events(
             if _spin_active.is_set():
                 with _spin_lock:
                     if _spin_active.is_set():  # re-check under lock
-                        sys.stdout.write(f"\r  {_SPIN[idx % len(_SPIN)]} {_spin_msg[0]}")
+                        msg = _spin_msg[0]
+                        line = f"\r  {_SPIN[idx % len(_SPIN)]} {msg}"
+                        # Pad to overwrite any previous longer message
+                        cols = _get_term_width()
+                        pad = max(0, cols - len(line) - 1)
+                        sys.stdout.write(line + " " * pad)
                         sys.stdout.flush()
                 idx += 1
             _spin_exit.wait(0.08)
-        sys.stdout.write("\r" + " " * 30 + "\r")
+        sys.stdout.write("\r" + " " * _get_term_width() + "\r")
         sys.stdout.flush()
 
     def _start_spinner(msg: str = "thinking...") -> None:
@@ -457,12 +475,19 @@ def _render_events(
             _spin_active.clear()
             if output_fn is None:
                 with _spin_lock:
-                    sys.stdout.write("\r" + " " * 30 + "\r")
+                    sys.stdout.write("\r" + " " * _get_term_width() + "\r")
                     sys.stdout.flush()
 
     def _kill_spinner() -> None:
         _spin_active.clear()
         _spin_exit.set()
+
+    def _set_spin_msg(msg: str) -> None:
+        _spin_msg[0] = msg
+        # Also update the shared status for REPL footer
+        _ext_status[0] = msg
+        if _ext_status_app[0]:
+            _ext_status_app[0].invalidate()
 
     # Wrap console.print for extensions: pause spinner while printing
     def _ext_safe_print(*args, **kwargs):
@@ -471,7 +496,7 @@ def _render_events(
             _spin_active.clear()
         with _spin_lock:
             if was_active and output_fn is None:
-                sys.stdout.write("\r" + " " * 30 + "\r")
+                sys.stdout.write("\r" + " " * _get_term_width() + "\r")
                 sys.stdout.flush()
             console.print(*args, **kwargs)
         if was_active:
@@ -484,6 +509,7 @@ def _render_events(
             ctx._console_print = _ext_safe_print
             ctx._pause_spinner = _stop_spinner
             ctx._resume_spinner = lambda: _start_spinner("running...")
+            ctx._set_spinner = _set_spin_msg
 
     if output_fn is None:
         _thr.Thread(target=_spin_loop, daemon=True).start()
@@ -2308,6 +2334,9 @@ def _repl(
     def _get_output_text() -> ANSI:
         with _output_lock:
             joined = "".join(output_text_parts)
+        status = _ext_status[0]
+        if status:
+            joined += f"\n  \033[33m⏳ {status}\033[0m"
         ansi = ANSI(joined)
         # Count actual fragment lines so _get_cursor_position stays in bounds.
         from prompt_toolkit.formatted_text import to_formatted_text
@@ -2337,6 +2366,7 @@ def _repl(
         thinking = agent._config.thinking_level
         think_str = f" [{thinking}]" if thinking and thinking != "off" else ""
         left_plain = f"  {ws_name}"
+        left_ansi = f"  {_DIM}{ws_name}{_RESET}"
         right_plain = f"{model}{think_str}  "
         try:
             width = _shutil.get_terminal_size().columns
@@ -2344,7 +2374,7 @@ def _repl(
             width = 80
         pad = max(1, width - len(left_plain) - len(right_plain))
         return ANSI(
-            f"  {_DIM}{ws_name}{_RESET}"
+            f"{left_ansi}"
             f"{' ' * pad}"
             f"{_CYAN}{model}{_DIM}{think_str}{_RESET}  "
         )
@@ -2673,6 +2703,7 @@ def _repl(
         mouse_support=False,  # disabled so the terminal can handle native text selection
     )
     app_ref[0] = application
+    _ext_status_app[0] = application  # allow extensions to trigger TUI redraws
     _theme_watcher = _ThemeWatcher(app_ref)
     _theme_watcher.start()
     try:
