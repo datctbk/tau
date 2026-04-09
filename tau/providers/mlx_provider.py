@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 import uuid
 from collections.abc import Generator
 from typing import Any
@@ -30,6 +32,10 @@ logger = logging.getLogger(__name__)
 # Module-level cache — model loading is expensive; reuse across turns.
 _cached: dict[str, tuple[Any, Any]] = {}
 
+# Serialize all MLX inference calls.  Metal command buffers are not thread-safe;
+# concurrent generate() / stream_generate() on the same model crashes the GPU.
+_inference_lock = threading.Lock()
+
 
 def _is_vlm_model(model_name: str) -> bool:
     """Return True for models that require mlx-vlm (e.g. Gemma 4)."""
@@ -41,6 +47,10 @@ class MLXProvider:
     def __init__(self, config: TauConfig, agent_config: AgentConfig) -> None:
         self._model_name = agent_config.model
         self._use_vlm = _is_vlm_model(self._model_name)
+        self._mlx_device = (config.mlx.device or "gpu").lower()
+
+        # Configure MLX device early so model loading/inference uses it.
+        self._configure_mlx_device()
 
         if self._use_vlm:
             try:
@@ -62,49 +72,70 @@ class MLXProvider:
         self._repetition_penalty = config.mlx.repetition_penalty
         self._top_p = config.mlx.top_p
         self._temperature = config.mlx.temperature
+        self._gpu_yield = config.mlx.gpu_yield_ms / 1000.0  # convert to seconds
+        self._gpu_yield_every = config.mlx.gpu_yield_every
         self._model, self._tokenizer = self._load_model()
 
-    def _load_model(self) -> tuple[Any, Any]:
-        if self._model_name in _cached:
-            logger.info("MLX: reusing cached model %s", self._model_name)
-            return _cached[self._model_name]
-
-        logger.info("MLX: loading model %s …", self._model_name)
-        import io, os, sys
-        # Suppress all tqdm / huggingface_hub progress bars that leave
-        # ghost lines on the interactive terminal.
-        _env_save = {}
-        for key in ("HF_HUB_DISABLE_PROGRESS_BARS", "TQDM_DISABLE"):
-            _env_save[key] = os.environ.get(key)
-            os.environ[key] = "1"
-        # Redirect stderr to swallow any residual progress output
-        _real_stderr = sys.stderr
-        sys.stderr = io.StringIO()
+    def _configure_mlx_device(self) -> None:
         try:
-            if self._use_vlm:
-                from mlx_vlm import load
-                model, processor = load(self._model_name)
-                self._ensure_chat_template(processor, model)
-                _cached[self._model_name] = (model, processor)
-                return model, processor
-            else:
-                from mlx_lm import load
-                model, tokenizer = load(self._model_name)
-                _cached[self._model_name] = (model, tokenizer)
-                return model, tokenizer
-        finally:
-            sys.stderr = _real_stderr
-            for key, old_val in _env_save.items():
-                if old_val is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = old_val
-            # Clear any leftover line on stdout
+            import mlx.core as mx
+        except Exception:
+            return
+
+        if self._mlx_device == "cpu":
+            mx.set_default_device(mx.cpu)
+            logger.info("MLX: using CPU device (MLX_DEVICE=cpu)")
+        else:
+            # Default to GPU for best throughput.
+            mx.set_default_device(mx.gpu)
+            if self._mlx_device not in ("gpu", "auto"):
+                logger.warning(
+                    "MLX: unknown device '%s'; falling back to gpu",
+                    self._mlx_device,
+                )
+
+    def _load_model(self) -> tuple[Any, Any]:
+        with _inference_lock:
+            if self._model_name in _cached:
+                logger.info("MLX: reusing cached model %s", self._model_name)
+                return _cached[self._model_name]
+
+            logger.info("MLX: loading model %s …", self._model_name)
+            import io, os, sys
+            # Suppress all tqdm / huggingface_hub progress bars that leave
+            # ghost lines on the interactive terminal.
+            _env_save = {}
+            for key in ("HF_HUB_DISABLE_PROGRESS_BARS", "TQDM_DISABLE"):
+                _env_save[key] = os.environ.get(key)
+                os.environ[key] = "1"
+            # Redirect stderr to swallow any residual progress output
+            _real_stderr = sys.stderr
+            sys.stderr = io.StringIO()
             try:
-                sys.stdout.write("\r\033[K")
-                sys.stdout.flush()
-            except Exception:
-                pass
+                if self._use_vlm:
+                    from mlx_vlm import load
+                    model, processor = load(self._model_name)
+                    self._ensure_chat_template(processor, model)
+                    _cached[self._model_name] = (model, processor)
+                    return model, processor
+                else:
+                    from mlx_lm import load
+                    model, tokenizer = load(self._model_name)
+                    _cached[self._model_name] = (model, tokenizer)
+                    return model, tokenizer
+            finally:
+                sys.stderr = _real_stderr
+                for key, old_val in _env_save.items():
+                    if old_val is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = old_val
+                # Clear any leftover line on stdout
+                try:
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.flush()
+                except Exception:
+                    pass
 
     def _get_tokenizer(self) -> Any:
         """Return the actual tokenizer for apply_chat_template / encode.
@@ -261,34 +292,35 @@ class MLXProvider:
         return processors if processors else None
 
     def _chat_blocking(self, prompt: str) -> ProviderResponse:
-        if self._use_vlm:
-            from mlx_vlm import generate
-            result = generate(
-                self._model,
-                self._tokenizer,
-                prompt=prompt,
-                max_tokens=self._max_tokens,
-                temperature=self._temperature,
-                top_p=self._top_p,
-                repetition_penalty=self._repetition_penalty,
-                eos_tokens=self._vlm_eos_tokens(),
-            )
-            raw = result.text
-            prompt_tokens = result.prompt_tokens
-            output_tokens = result.generation_tokens
-        else:
-            from mlx_lm import generate
-            raw = generate(
-                self._model,
-                self._tokenizer,
-                prompt=prompt,
-                max_tokens=self._max_tokens,
-                sampler=self._make_sampler(),
-                logits_processors=self._make_logits_processors(),
-            )
-            tokenizer = self._get_tokenizer()
-            prompt_tokens = len(tokenizer.encode(prompt))
-            output_tokens = len(tokenizer.encode(raw))
+        with _inference_lock:
+            if self._use_vlm:
+                from mlx_vlm import generate
+                result = generate(
+                    self._model,
+                    self._tokenizer,
+                    prompt=prompt,
+                    max_tokens=self._max_tokens,
+                    temperature=self._temperature,
+                    top_p=self._top_p,
+                    repetition_penalty=self._repetition_penalty,
+                    eos_tokens=self._vlm_eos_tokens(),
+                )
+                raw = result.text
+                prompt_tokens = result.prompt_tokens
+                output_tokens = result.generation_tokens
+            else:
+                from mlx_lm import generate
+                raw = generate(
+                    self._model,
+                    self._tokenizer,
+                    prompt=prompt,
+                    max_tokens=self._max_tokens,
+                    sampler=self._make_sampler(),
+                    logits_processors=self._make_logits_processors(),
+                )
+                tokenizer = self._get_tokenizer()
+                prompt_tokens = len(tokenizer.encode(prompt))
+                output_tokens = len(tokenizer.encode(raw))
 
         content, _thinking = _split_thinking(raw)
         tool_calls = _parse_tool_calls(content)
@@ -320,135 +352,155 @@ class MLXProvider:
         output_tokens = 0
         last_vlm_response: Any = None
 
-        if self._use_vlm:
-            from mlx_vlm import stream_generate
-            stream_iter = stream_generate(
-                self._model,
-                self._tokenizer,
-                prompt=prompt,
-                max_tokens=self._max_tokens,
-                temperature=self._temperature,
-                top_p=self._top_p,
-                repetition_penalty=self._repetition_penalty,
-                eos_tokens=self._vlm_eos_tokens(),
-            )
-        else:
-            from mlx_lm import stream_generate
-            stream_iter = stream_generate(
-                self._model,
-                self._tokenizer,
-                prompt=prompt,
-                max_tokens=self._max_tokens,
-                sampler=self._make_sampler(),
-                logits_processors=self._make_logits_processors(),
-            )
-
-        for response in stream_iter:
-            token = response.text if hasattr(response, "text") else str(response)
+        # Acquire the inference lock for the entire streaming generation.
+        # Metal command buffers are not thread-safe; concurrent access from
+        # background sub-agent threads causes GPU assertion failures.
+        _inference_lock.acquire()
+        try:
             if self._use_vlm:
-                last_vlm_response = response
-            output_tokens += 1
-            buffer += token
+                from mlx_vlm import stream_generate
+                stream_iter = stream_generate(
+                    self._model,
+                    self._tokenizer,
+                    prompt=prompt,
+                    max_tokens=self._max_tokens,
+                    temperature=self._temperature,
+                    top_p=self._top_p,
+                    repetition_penalty=self._repetition_penalty,
+                    eos_tokens=self._vlm_eos_tokens(),
+                )
+            else:
+                from mlx_lm import stream_generate
+                stream_iter = stream_generate(
+                    self._model,
+                    self._tokenizer,
+                    prompt=prompt,
+                    max_tokens=self._max_tokens,
+                    sampler=self._make_sampler(),
+                    logits_processors=self._make_logits_processors(),
+                )
 
-            # --- State: scanning for opening <think> ----------------------
-            if not think_search_done and not in_thinking:
-                if "<think>" in buffer:
-                    think_search_done = True
-                    in_thinking = True
-                    before, _, after = buffer.partition("<think>")
-                    if before.strip():
-                        content_parts.append(before)
-                        yield TextDelta(text=before)
-                    buffer = after
-                    if buffer:
-                        yield TextDelta(text=buffer, is_thinking=True)
-                        buffer = ""
-                    continue
-                # Buffer enough chars; if no <think> found, treat as content
-                if len(buffer) > 12:
-                    think_search_done = True
-                    content_parts.append(buffer)
-                    yield TextDelta(text=buffer)
-                    buffer = ""
-                continue
+            for response in stream_iter:
+                token = response.text if hasattr(response, "text") else str(response)
+                if self._use_vlm:
+                    last_vlm_response = response
+                output_tokens += 1
+                buffer += token
 
-            # --- State: inside <think> block ------------------------------
-            if in_thinking:
-                if "</think>" in buffer:
-                    thinking_text, _, rest = buffer.partition("</think>")
-                    if thinking_text:
-                        yield TextDelta(text=thinking_text, is_thinking=True)
-                    in_thinking = False
-                    think_search_done = True
-                    buffer = rest.lstrip("\n")
-                    if buffer:
+                # Yield GPU time so other Metal clients (video playback, etc.)
+                # are not starved by continuous inference.
+                # mlx-lm's generate_step pre-computes the NEXT token via
+                # mx.async_eval before yielding the current one, so a plain
+                # time.sleep() is useless — the GPU stays busy.  We must
+                # first drain the Metal pipeline with mx.synchronize() to
+                # force all queued GPU work to complete, THEN sleep to create
+                # a genuine idle window for Chrome's compositor.
+                if self._gpu_yield_every > 0 and output_tokens % self._gpu_yield_every == 0:
+                    import mlx.core as _mx
+                    _mx.synchronize()
+                    time.sleep(self._gpu_yield)
+
+                # --- State: scanning for opening <think> ----------------------
+                if not think_search_done and not in_thinking:
+                    if "<think>" in buffer:
+                        think_search_done = True
+                        in_thinking = True
+                        before, _, after = buffer.partition("<think>")
+                        if before.strip():
+                            content_parts.append(before)
+                            yield TextDelta(text=before)
+                        buffer = after
+                        if buffer:
+                            yield TextDelta(text=buffer, is_thinking=True)
+                            buffer = ""
+                        continue
+                    # Buffer enough chars; if no <think> found, treat as content
+                    if len(buffer) > 12:
+                        think_search_done = True
                         content_parts.append(buffer)
                         yield TextDelta(text=buffer)
                         buffer = ""
+                    continue
+
+                # --- State: inside <think> block ------------------------------
+                if in_thinking:
+                    if "</think>" in buffer:
+                        thinking_text, _, rest = buffer.partition("</think>")
+                        if thinking_text:
+                            yield TextDelta(text=thinking_text, is_thinking=True)
+                        in_thinking = False
+                        think_search_done = True
+                        buffer = rest.lstrip("\n")
+                        if buffer:
+                            content_parts.append(buffer)
+                            yield TextDelta(text=buffer)
+                            buffer = ""
+                    else:
+                        yield TextDelta(text=token, is_thinking=True)
+                        buffer = ""
+                    continue
+
+                # --- State: inside tool_call block (suppress from display) --
+                if in_tool_call:
+                    if _TC_CLOSE in buffer:
+                        in_tool_call = False
+                        # Keep accumulated buffer for final parsing; emit nothing
+                        content_parts.append(buffer)
+                        buffer = ""
+                    # else: still accumulating — don't emit anything
+                    continue
+
+                # --- State: normal content — watch for tool_call opening ----
+                if _TC_OPEN in buffer:
+                    before, _, after = buffer.partition(_TC_OPEN)
+                    if before:
+                        content_parts.append(before)
+                        yield TextDelta(text=before)
+                    # Re-attach the tag so _parse_tool_calls can find it later
+                    buffer = _TC_OPEN + after
+                    in_tool_call = True
+                    continue
+
+                # Hold partial tag prefixes in the buffer rather than emitting early
+                if "<" in buffer and not buffer.endswith(">") and not buffer.endswith("\n"):
+                    continue
+
+                content_parts.append(token)
+                yield TextDelta(text=token)
+                buffer = ""
+
+            # Flush remaining buffer
+            if buffer:
+                stripped = buffer.replace("</think>", "")
+                if in_thinking:
+                    if stripped:
+                        yield TextDelta(text=stripped, is_thinking=True)
+                elif not in_tool_call:
+                    if stripped:
+                        content_parts.append(stripped)
+                        yield TextDelta(text=stripped)
                 else:
-                    yield TextDelta(text=token, is_thinking=True)
-                    buffer = ""
-                continue
-
-            # --- State: inside tool_call block (suppress from display) --
-            if in_tool_call:
-                if _TC_CLOSE in buffer:
-                    in_tool_call = False
-                    # Keep accumulated buffer for final parsing; emit nothing
+                    # Incomplete tool_call block — still keep for parsing
                     content_parts.append(buffer)
-                    buffer = ""
-                # else: still accumulating — don't emit anything
-                continue
 
-            # --- State: normal content — watch for tool_call opening ----
-            if _TC_OPEN in buffer:
-                before, _, after = buffer.partition(_TC_OPEN)
-                if before:
-                    content_parts.append(before)
-                    yield TextDelta(text=before)
-                # Re-attach the tag so _parse_tool_calls can find it later
-                buffer = _TC_OPEN + after
-                in_tool_call = True
-                continue
+            final_content = "".join(content_parts).strip()
+            tool_calls = _parse_tool_calls(final_content)
+            stop_reason: StopReason = "tool_use" if tool_calls else "end_turn"
+            if tool_calls:
+                final_content = _strip_tool_call_blocks(final_content)
 
-            # Hold partial tag prefixes in the buffer rather than emitting early
-            if "<" in buffer and not buffer.endswith(">") and not buffer.endswith("\n"):
-                continue
+            if self._use_vlm and last_vlm_response is not None:
+                prompt_tokens = last_vlm_response.prompt_tokens
+                output_tokens = last_vlm_response.generation_tokens
 
-            content_parts.append(token)
-            yield TextDelta(text=token)
-            buffer = ""
-
-        # Flush remaining buffer
-        if buffer:
-            stripped = buffer.replace("</think>", "")
-            if in_thinking:
-                if stripped:
-                    yield TextDelta(text=stripped, is_thinking=True)
-            elif not in_tool_call:
-                if stripped:
-                    content_parts.append(stripped)
-                    yield TextDelta(text=stripped)
-            else:
-                # Incomplete tool_call block — still keep for parsing
-                content_parts.append(buffer)
-
-        final_content = "".join(content_parts).strip()
-        tool_calls = _parse_tool_calls(final_content)
-        stop_reason: StopReason = "tool_use" if tool_calls else "end_turn"
-        if tool_calls:
-            final_content = _strip_tool_call_blocks(final_content)
-
-        if self._use_vlm and last_vlm_response is not None:
-            prompt_tokens = last_vlm_response.prompt_tokens
-            output_tokens = last_vlm_response.generation_tokens
-
-        yield ProviderResponse(
-            content=final_content or None,
-            tool_calls=tool_calls,
-            stop_reason=stop_reason,
-            usage=TokenUsage(input_tokens=prompt_tokens, output_tokens=output_tokens),
-        )
+            yield ProviderResponse(
+                content=final_content or None,
+                tool_calls=tool_calls,
+                stop_reason=stop_reason,
+                usage=TokenUsage(input_tokens=prompt_tokens, output_tokens=output_tokens),
+            )
+        finally:
+            _inference_lock.release()
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,13 @@ _stream_console = Console(highlight=False, markup=False, soft_wrap=True)
 _ext_status: dict[str, str] = {}  # key → status message
 _ext_status_app = [None]  # REPL sets this to app_ref[0] for invalidation
 
+# Maps ext_status key → index in output_text_parts for in-place live updates.
+_live_status_idx: dict[str, int] = {}
+
+# REPL output state — populated by _repl(), used by _set_spin_msg for live status.
+_repl_output_parts: list[list[str]] = [[]]   # [0] set to output_text_parts by _repl
+_repl_output_lock: list[Any] = [None]        # [0] set to _output_lock by _repl
+
 
 # ---------------------------------------------------------------------------
 # Theme — centralised colours loaded from config
@@ -484,11 +491,32 @@ def _render_events(
 
     def _set_spin_msg(msg: str, key: str = "_default") -> None:
         _spin_msg[0] = msg
-        # Also update the shared status for REPL output area
+        parts = _repl_output_parts[0]
+        lock = _repl_output_lock[0]
+        # Update the live status entry in output_text_parts (in-place).
         if msg:
             _ext_status[key] = msg
+            if lock is not None and parts:
+                status_text = f"\n  \033[2m⏳ {msg}\033[0m"
+                with lock:
+                    if key in _live_status_idx:
+                        parts[_live_status_idx[key]] = status_text
+                    else:
+                        _live_status_idx[key] = len(parts)
+                        parts.append(status_text)
         else:
-            _ext_status.pop(key, None)
+            # Agent finished — freeze with ✓ marker
+            old = _ext_status.pop(key, None)
+            if lock is not None and parts:
+                with lock:
+                    if key in _live_status_idx:
+                        idx = _live_status_idx.pop(key)
+                        if old:
+                            parts[idx] = f"\n  \033[2m✓ {old}{_RESET}"
+                    elif old:
+                        parts.append(f"\n  \033[2m✓ {old}{_RESET}")
+            else:
+                _live_status_idx.pop(key, None)
         if _ext_status_app[0]:
             _ext_status_app[0].invalidate()
 
@@ -2253,12 +2281,13 @@ def _repl(
     from prompt_toolkit.document import Document
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.formatted_text import ANSI
-    from prompt_toolkit.layout import Layout, HSplit, Window, ScrollablePane, Float, FloatContainer
+    from prompt_toolkit.layout import Layout, HSplit, Window, ScrollablePane, Float, FloatContainer, ConditionalContainer
     from prompt_toolkit.layout.dimension import Dimension as D
     from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
     from prompt_toolkit.layout.menus import CompletionsMenu
     from prompt_toolkit.layout.processors import BeforeInput
     from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.filters import Condition
 
     from tau.editor import (
         expand_at_files,
@@ -2334,12 +2363,13 @@ def _repl(
     _output_lock = threading.Lock()
     _parsed_line_count: list[int] = [1]
 
+    # Wire up module-level refs so _set_spin_msg can access REPL state.
+    _repl_output_parts[0] = output_text_parts
+    _repl_output_lock[0] = _output_lock
+
     def _get_output_text() -> ANSI:
         with _output_lock:
             joined = "".join(output_text_parts)
-        if _ext_status:
-            for _st_msg in _ext_status.values():
-                joined += f"\n  \033[2m⏳ {_st_msg}\033[0m"
         ansi = ANSI(joined)
         # Count actual fragment lines so _get_cursor_position stays in bounds.
         from prompt_toolkit.formatted_text import to_formatted_text
@@ -2358,6 +2388,15 @@ def _repl(
             output_text_parts.append(text)
         if app_ref[0]:
             app_ref[0].invalidate()
+
+    def _flush_ext_status() -> None:
+        """Detach live status entries so they stay at the current position.
+
+        Called before appending a new user message so the status line stays
+        visually above the new conversation turn.  The next _set_spin_msg
+        update will create a fresh entry below the new message.
+        """
+        _live_status_idx.clear()
 
     # -- footer data ---------------------------------------------------------
     import shutil as _shutil
@@ -2547,6 +2586,7 @@ def _repl(
         # new agent turn — expand @file references first
         ws = agent._config.workspace_root
         expanded, inlined_files = expand_at_files(text, ws)
+        _flush_ext_status()
         if inlined_files:
             n = len(inlined_files)
             names = ", ".join(Path(f).name for f in inlined_files)

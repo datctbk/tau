@@ -54,9 +54,16 @@ class OllamaProviderConfig(BaseSettings):
 
 class MLXProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MLX_")
+    device: str = "gpu"  # gpu|cpu
     temperature: float = 0.7
     top_p: float = 0.9
     repetition_penalty: float = 1.05
+    prefill_step_size: int = 256   # smaller prefill chunks reduce long GPU stalls
+    max_kv_size: int | None = 2048 # cap attention cache to limit per-token cost
+    kv_bits: int | None = 4        # quantize KV cache to reduce memory bandwidth
+    quantized_kv_start: int = 0
+    gpu_yield_every: int = 0       # disabled by default (low impact on MLX async path)
+    gpu_yield_ms: float = 0.0
 
 
 class ShellToolConfig(BaseSettings):
