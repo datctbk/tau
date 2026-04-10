@@ -49,6 +49,21 @@ class MLXProvider:
         self._use_vlm = _is_vlm_model(self._model_name)
         self._mlx_device = (config.mlx.device or "gpu").lower()
 
+        self._max_tokens = agent_config.max_tokens
+        self._enable_thinking = agent_config.thinking_level != "off"
+        self._repetition_penalty = config.mlx.repetition_penalty
+        self._top_p = config.mlx.top_p
+        self._temperature = config.mlx.temperature
+        self._memory_limit_gb = config.mlx.memory_limit_gb
+        self._wired_limit_gb = config.mlx.wired_limit_gb
+        self._cache_limit_mb = config.mlx.cache_limit_mb
+        self._prefill_step_size = config.mlx.prefill_step_size
+        self._max_kv_size = config.mlx.max_kv_size
+        self._kv_bits = config.mlx.kv_bits
+        self._quantized_kv_start = config.mlx.quantized_kv_start
+        self._gpu_yield = config.mlx.gpu_yield_ms / 1000.0  # convert to seconds
+        self._gpu_yield_every = config.mlx.gpu_yield_every
+
         # Configure MLX device early so model loading/inference uses it.
         self._configure_mlx_device()
 
@@ -66,14 +81,6 @@ class MLXProvider:
                 raise ImportError(
                     "mlx-lm package is required: pip install mlx-lm"
                 ) from exc
-
-        self._max_tokens = agent_config.max_tokens
-        self._enable_thinking = agent_config.thinking_level != "off"
-        self._repetition_penalty = config.mlx.repetition_penalty
-        self._top_p = config.mlx.top_p
-        self._temperature = config.mlx.temperature
-        self._gpu_yield = config.mlx.gpu_yield_ms / 1000.0  # convert to seconds
-        self._gpu_yield_every = config.mlx.gpu_yield_every
         self._model, self._tokenizer = self._load_model()
 
     def _configure_mlx_device(self) -> None:
@@ -93,6 +100,27 @@ class MLXProvider:
                     "MLX: unknown device '%s'; falling back to gpu",
                     self._mlx_device,
                 )
+
+        # Reserve headroom for other Metal clients (e.g. Chrome video)
+        # by capping MLX memory and cache usage.
+        if self._mlx_device != "cpu":
+            if self._memory_limit_gb is not None:
+                try:
+                    mx.set_memory_limit(int(self._memory_limit_gb * 1024 * 1024 * 1024))
+                    logger.info("MLX: memory limit set to %.1f GB", self._memory_limit_gb)
+                except Exception:
+                    pass
+            if self._wired_limit_gb is not None:
+                try:
+                    mx.set_wired_limit(int(self._wired_limit_gb * 1024 * 1024 * 1024))
+                    logger.info("MLX: wired limit set to %.1f GB", self._wired_limit_gb)
+                except Exception:
+                    pass
+            try:
+                mx.set_cache_limit(int(self._cache_limit_mb * 1024 * 1024))
+                logger.info("MLX: cache limit set to %d MB", self._cache_limit_mb)
+            except Exception:
+                pass
 
     def _load_model(self) -> tuple[Any, Any]:
         with _inference_lock:
@@ -291,6 +319,14 @@ class MLXProvider:
         )
         return processors if processors else None
 
+    def _mlx_lm_generation_kwargs(self) -> dict[str, Any]:
+        return {
+            "prefill_step_size": self._prefill_step_size,
+            "max_kv_size": self._max_kv_size,
+            "kv_bits": self._kv_bits,
+            "quantized_kv_start": self._quantized_kv_start,
+        }
+
     def _chat_blocking(self, prompt: str) -> ProviderResponse:
         with _inference_lock:
             if self._use_vlm:
@@ -317,6 +353,7 @@ class MLXProvider:
                     max_tokens=self._max_tokens,
                     sampler=self._make_sampler(),
                     logits_processors=self._make_logits_processors(),
+                    **self._mlx_lm_generation_kwargs(),
                 )
                 tokenizer = self._get_tokenizer()
                 prompt_tokens = len(tokenizer.encode(prompt))
@@ -378,6 +415,7 @@ class MLXProvider:
                     max_tokens=self._max_tokens,
                     sampler=self._make_sampler(),
                     logits_processors=self._make_logits_processors(),
+                    **self._mlx_lm_generation_kwargs(),
                 )
 
             for response in stream_iter:
@@ -389,15 +427,17 @@ class MLXProvider:
 
                 # Yield GPU time so other Metal clients (video playback, etc.)
                 # are not starved by continuous inference.
-                # mlx-lm's generate_step pre-computes the NEXT token via
-                # mx.async_eval before yielding the current one, so a plain
-                # time.sleep() is useless — the GPU stays busy.  We must
-                # first drain the Metal pipeline with mx.synchronize() to
-                # force all queued GPU work to complete, THEN sleep to create
-                # a genuine idle window for Chrome's compositor.
+                # 1. Sync the generation_stream to drain all queued GPU work
+                # 2. Clear Metal cache to release intermediate GPU buffers
+                # 3. Sleep to create a genuine idle window
                 if self._gpu_yield_every > 0 and output_tokens % self._gpu_yield_every == 0:
                     import mlx.core as _mx
-                    _mx.synchronize()
+                    try:
+                        from mlx_lm.generate import generation_stream as _gs
+                        _mx.synchronize(_gs)
+                    except ImportError:
+                        _mx.synchronize()
+                    _mx.clear_cache()
                     time.sleep(self._gpu_yield)
 
                 # --- State: scanning for opening <think> ----------------------

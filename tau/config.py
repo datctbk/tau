@@ -58,12 +58,15 @@ class MLXProviderConfig(BaseSettings):
     temperature: float = 0.7
     top_p: float = 0.9
     repetition_penalty: float = 1.05
-    prefill_step_size: int = 256   # smaller prefill chunks reduce long GPU stalls
-    max_kv_size: int | None = 2048 # cap attention cache to limit per-token cost
-    kv_bits: int | None = 4        # quantize KV cache to reduce memory bandwidth
+    memory_limit_gb: float | None = 16.0
+    wired_limit_gb: float | None = 12.0
+    cache_limit_mb: int = 64
+    prefill_step_size: int = 128
+    max_kv_size: int | None = 1024
+    kv_bits: int | None = 4
     quantized_kv_start: int = 0
-    gpu_yield_every: int = 0       # disabled by default (low impact on MLX async path)
-    gpu_yield_ms: float = 0.0
+    gpu_yield_every: int = 1       # yield GPU every token for fairness
+    gpu_yield_ms: float = 8.0      # short pause to let compositor submit frames
 
 
 class ShellToolConfig(BaseSettings):
