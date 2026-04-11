@@ -512,9 +512,9 @@ def _render_events(
                     if key in _live_status_idx:
                         idx = _live_status_idx.pop(key)
                         if old:
-                            parts[idx] = f"\n  \033[2m✓ {old}{_RESET}"
+                            parts[idx] = f"\n  \033[2m✓ {old}\033[0m"
                     elif old:
-                        parts.append(f"\n  \033[2m✓ {old}{_RESET}")
+                        parts.append(f"\n  \033[2m✓ {old}\033[0m")
             else:
                 _live_status_idx.pop(key, None)
         if _ext_status_app[0]:
