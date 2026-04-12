@@ -235,6 +235,8 @@ class TauConfig(BaseSettings):
     max_tokens: int = 6144
     max_turns: int = 20
     trim_strategy: str = "sliding_window"
+    compaction_enabled: bool = True
+    compaction_threshold: float = 0.60
     system_prompt: str = (
         "You are tau, a minimal CLI coding agent. "
         "Use the available tools to help the user with coding tasks. "
@@ -265,6 +267,13 @@ class TauConfig(BaseSettings):
         allowed = {"sliding_window", "summarise"}
         if v not in allowed:
             raise ValueError(f"trim_strategy must be one of {allowed}")
+        return v
+
+    @field_validator("compaction_threshold")
+    @classmethod
+    def validate_compaction_threshold(cls, v: float) -> float:
+        if not 0.40 <= v <= 0.90:
+            raise ValueError("compaction_threshold must be between 0.40 and 0.90")
         return v
 
     def calculate_cost(self, model: str, usage_in: Any) -> float:

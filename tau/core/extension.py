@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Type alias for event hooks: receives every Event yielded by agent.run()
 EventHook = Callable[["Event"], None]
+BeforeTurnHook = Callable[[str], None]
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +78,10 @@ class Extension:
 
     def event_hook(self, event: "Event") -> None:
         """Called for every Event yielded by agent.run(). Override to observe/react."""
+        pass
+
+    def before_turn(self, user_input: str) -> None:
+        """Called before agent.run(user_input, ...) starts for a turn."""
         pass
 
     def before_tool_call(self, context: "BeforeToolCallContext") -> "BeforeToolCallResult | None":
@@ -292,6 +297,7 @@ class ExtensionRegistry:
         self._extensions: dict[str, Extension] = {}   # name → instance
         self._slash_index: dict[str, Extension] = {}  # command → extension
         self._hooks: list[EventHook] = []
+        self._before_turn_hooks: list[BeforeTurnHook] = []
 
     # ------------------------------------------------------------------
     # Loading
@@ -421,6 +427,10 @@ class ExtensionRegistry:
         if type(ext).event_hook is not Extension.event_hook:
             self._hooks.append(ext.event_hook)
 
+        # Before-turn hook — register only when overridden.
+        if type(ext).before_turn is not Extension.before_turn:
+            self._before_turn_hooks.append(ext.before_turn)
+
         # on_load callback
         try:
             ext.on_load(ext_context)
@@ -458,6 +468,7 @@ class ExtensionRegistry:
         self._extensions.clear()
         self._slash_index.clear()
         self._hooks.clear()
+        self._before_turn_hooks.clear()
         if disabled is not None:
             self._disabled = set(disabled)
         return self.load_all(registry, context, steering, console_print, agent_config=agent_config)
@@ -486,6 +497,14 @@ class ExtensionRegistry:
                 hook(event)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Extension event hook raised: %s", exc)
+
+    def fire_before_turn(self, user_input: str) -> None:
+        """Call every registered before_turn hook with the current user input."""
+        for hook in self._before_turn_hooks:
+            try:
+                hook(user_input)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Extension before_turn hook raised: %s", exc)
 
     def fire_before_tool_call(self, context: "BeforeToolCallContext") -> "BeforeToolCallResult | None":
         """Dispatch before_tool_call hook to all extensions. Short-circuits if blocked."""

@@ -192,7 +192,7 @@ class AgentConfig:
     workspace_root: str = "."
     # --- auto-compaction ---
     compaction_enabled: bool = True
-    compaction_threshold: float = 0.72  # compact when context reaches 72% of max_tokens
+    compaction_threshold: float = 0.60  # compact when context reaches 60% of max_tokens
     # --- auto-retry ---
     retry_enabled: bool = True
     retry_max_attempts: int = 3
@@ -202,6 +202,8 @@ class AgentConfig:
     parallel_tools_max_workers: int = 8  # thread-pool cap
     # --- budget ---
     max_cost: float = 0.0  # USD ceiling; 0 = unlimited
+    # --- memory retrieval ---
+    memory_topk: int = 0  # 0 = disabled; >0 enables top-k dynamic memory retrieval
 
 # ---------------------------------------------------------------------------
 # Compaction

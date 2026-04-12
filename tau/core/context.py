@@ -162,13 +162,20 @@ _COMPACTION_SYSTEM = (
     "You are a conversation compactor. "
     "Produce a dense, structured summary of the conversation below. "
     "Preserve ALL key facts, decisions, file paths, code snippets, errors, "
-    "and any unresolved tasks. Be thorough — this summary replaces the original history."
+    "and any unresolved tasks. Be thorough — this summary replaces the original history. "
+    "Use concise bullet points and keep the output scannable."
 )
 
 _COMPACTION_PROMPT = (
-    "Summarise the following conversation history. "
-    "Keep every important technical detail, file name, code change, "
-    "decision, and pending task:\n\n{transcript}"
+    "Summarise the following conversation history in this exact structure:\n"
+    "1) Current Objective\n"
+    "2) Decisions Made\n"
+    "3) Files Changed (path + what changed)\n"
+    "4) Errors and Fixes\n"
+    "5) Open Tasks / Next Steps (max 5)\n"
+    "6) Important Constraints\n\n"
+    "Keep every important technical detail, file name, code change, decision, and pending task. "
+    "Do not include filler text.\n\n{transcript}"
 )
 
 # Minimum non-system messages required before compaction is attempted

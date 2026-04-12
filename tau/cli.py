@@ -223,6 +223,7 @@ _AGENT_OPTIONS = [
             "Example: --tools read_file,grep,find,ls"
         ),
     ),
+    click.option("--topk", type=int, default=0, show_default=True, help="Top-k relevant memory entries to inject per turn (0 disables)."),
 ]
 
 def _agent_options(fn):
@@ -312,13 +313,19 @@ def _build_agent(
         extra_paths=list(tau_config.extensions.paths) + _pkg_extension_paths,
         disabled=tau_config.extensions.disabled,
     )
-    ext_registry.load_all(
+    loaded_exts = ext_registry.load_all(
         registry=registry,
         context=context,
         steering=steering,
         console_print=console.print,
         agent_config=agent_config,
     )
+    if loaded_exts:
+        console.print(
+            "[dim]Loaded extensions: " + ", ".join(loaded_exts) + "[/dim]"
+        )
+    else:
+        console.print("[dim]Loaded extensions: (none)[/dim]")
     if resume_id:
         session = session_manager.load(resume_id)
         context.restore(session.messages)
@@ -352,6 +359,7 @@ def _make_agent_config(
     no_parallel: bool = False,
     persistent_shell: bool = False,
     max_cost: float | None = None,
+    topk: int = 0,
 ) -> AgentConfig:
     if provider:
         tau_config.provider = provider
@@ -368,10 +376,13 @@ def _make_agent_config(
         max_turns=tau_config.max_turns,
         system_prompt=tau_config.system_prompt,
         trim_strategy=tau_config.trim_strategy,
+        compaction_enabled=tau_config.compaction_enabled,
+        compaction_threshold=tau_config.compaction_threshold,
         workspace_root=str(Path(workspace).resolve()),
         parallel_tools=tau_config.parallel_tools and not no_parallel,
         parallel_tools_max_workers=tau_config.parallel_tools_max_workers,
         max_cost=max_cost if max_cost is not None else tau_config.max_cost,
+        memory_topk=max(0, topk),
     )
 
 # ---------------------------------------------------------------------------
@@ -556,6 +567,9 @@ def _render_events(
         _thr.Thread(target=_spin_loop, daemon=True).start()
     _start_spinner("thinking...")
 
+    if ext_registry is not None:
+        ext_registry.fire_before_turn(user_input)
+
     gen = agent.run(user_input, images=images)
     for event in gen:
         # --- Escape-to-cancel ---
@@ -712,6 +726,8 @@ def _render_events_print(
     """Print mode: collect only assistant text, output it to stdout, then exit."""
     text_parts: list[str] = []
     exit_code = 0
+    if ext_registry is not None:
+        ext_registry.fire_before_turn(user_input)
     for event in agent.run(user_input, images=images):
         if ext_registry is not None:
             ext_registry.fire_hooks(event)
@@ -744,6 +760,8 @@ def _render_events_json(
 ) -> None:
     """JSON mode: emit each event as a JSON line to stdout (JSONL)."""
     exit_code = 0
+    if ext_registry is not None:
+        ext_registry.fire_before_turn(user_input)
     for event in agent.run(user_input, images=images):
         if ext_registry is not None:
             ext_registry.fire_hooks(event)
@@ -2353,10 +2371,23 @@ def _repl(
     _DIM = "\033[2m"
     _RESET = "\033[0m"
 
+    loaded_names: list[str] = []
+    if ext_registry is not None:
+        try:
+            loaded_names = [m.name for m in ext_registry.loaded_extensions()]
+        except Exception:
+            loaded_names = []
+    loaded_line = (
+        f"{_DIM}Extensions: {', '.join(loaded_names)}{_RESET}\n"
+        if loaded_names
+        else f"{_DIM}Extensions: (none){_RESET}\n"
+    )
+
     header = (
         f"{_BOLD}{_CYAN}tau v{_tau_version()}{_RESET}"
         f"  {_MAGENTA}{agent_config.provider}/{agent_config.model}{_RESET}"
         f"  {_DIM}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
+        + loaded_line
         + f"{_DIM}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom  ·  Esc cancel  ·  Ctrl+J new line{_RESET}\n"
         + f"{_DIM}{'═' * 60}{_RESET}\n"
     )
@@ -2836,6 +2867,7 @@ def run_cmd(
     no_session: bool,
     trace_log: str | None,
     tools_filter: str | None,
+    topk: int,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
     # Split args into @file tokens and plain text tokens.
@@ -2892,7 +2924,7 @@ def run_cmd(
     ensure_tau_home()
     tau_config = load_config()
     theme.load(tau_config)
-    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, persistent_shell, max_cost)
+    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, persistent_shell, max_cost, topk)
     if no_session:
         from tau.sdk import InMemorySessionManager
         session_manager = InMemorySessionManager()
@@ -3031,6 +3063,7 @@ def sessions_fork(
     output_mode: str | None, print_mode: bool,
     template_name: str | None, var: tuple[str, ...],
     max_cost: float | None, no_session: bool,
+    topk: int,
 ) -> None:
     from tau.core.session import local_sessions_dir
     sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
@@ -3052,7 +3085,7 @@ def sessions_fork(
         _setup_logging(verbose)
         ensure_tau_home()
         tau_config = load_config()
-        agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, max_cost=max_cost)
+        agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, max_cost=max_cost, topk=topk)
         steering = SteeringChannel()
         agent, ext_reg = _build_agent(
             tau_config=tau_config, agent_config=agent_config,
@@ -3125,6 +3158,7 @@ def sessions_import(
     max_cost: float | None,
     no_session: bool,
     trace_log: str | None,
+    topk: int,
 ) -> None:
     """Import a previously-exported JSON session file."""
     import uuid
@@ -3160,7 +3194,7 @@ def sessions_import(
         tau_config = load_config()
         agent_config = _make_agent_config(
             tau_config, provider, model, think, no_confirm, workspace, no_parallel,
-            persistent_shell, max_cost=max_cost,
+            persistent_shell, max_cost=max_cost, topk=topk,
         )
         steering = SteeringChannel()
         agent, ext_reg = _build_agent(
