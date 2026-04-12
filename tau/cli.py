@@ -522,11 +522,21 @@ def _render_events(
 
     # Wrap console.print for extensions: pause spinner while printing
     def _ext_safe_print(*args, **kwargs):
+        # In TUI mode, always write extension output through output_fn so
+        # prompt_toolkit owns all screen drawing and footer layout stays intact.
+        if output_fn is not None:
+            import io
+            f = io.StringIO()
+            c = Console(file=f, force_terminal=True, color_system="truecolor")
+            c.print(*args, **kwargs)
+            output_fn(f.getvalue())
+            return
+
         was_active = _spin_active.is_set()
         if was_active:
             _spin_active.clear()
         with _spin_lock:
-            if was_active and output_fn is None:
+            if was_active:
                 sys.stdout.write("\r" + " " * _get_term_width() + "\r")
                 sys.stdout.flush()
             console.print(*args, **kwargs)
@@ -2389,6 +2399,24 @@ def _repl(
         if app_ref[0]:
             app_ref[0].invalidate()
 
+    def _tui_ext_print(content: Any, **kwargs: Any) -> None:
+        """Render extension output into the REPL output buffer.
+
+        Avoid direct terminal writes (console.print) in full-screen TUI mode,
+        which can corrupt prompt_toolkit layout and overlap the footer.
+        """
+        import io
+
+        buf = io.StringIO()
+        c = Console(file=buf, force_terminal=True, color_system="truecolor")
+        c.print(content, **kwargs)
+        _append_output(buf.getvalue())
+
+    # In REPL mode, extension slash output must go through _append_output to
+    # preserve layout correctness.
+    if ext_context is not None:
+        ext_context._console_print = _tui_ext_print
+
     def _flush_ext_status() -> None:
         """Detach live status entries so they stay at the current position.
 
@@ -2576,6 +2604,17 @@ def _repl(
             # /prompt returns the expanded template text as a string
             if isinstance(handled, str):
                 text = handled
+            else:
+                # Unknown slash command: do not send it to the LLM.
+                cmd_word = text.split()[0].lower()
+                ext_cmds = [name for name, _ in ext_registry.all_slash_commands()] if ext_registry else []
+                suggestions = complete_slash_commands(cmd_word, BUILTIN_SLASH_COMMANDS, ext_cmds)
+                hint = " ".join(suggestions[:5]) if suggestions else "/help"
+                _append_output(
+                    f"\n{_DIM}⚠ Unknown command:{_RESET} {cmd_word}\n"
+                    f"{_DIM}Hint:{_RESET} try {hint}\n"
+                )
+                return
 
         # steering (agent already running)
         if agent_running.is_set() and steering is not None:
