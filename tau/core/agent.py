@@ -286,22 +286,27 @@ class Agent:
                     name=call.name,
                 ))
 
-            # Fast-path: when the `agent` tool spawns a background task, the
-            # tool result is already user-ready. Avoid an extra LLM round-trip
-            # that tends to add redundant narration and token cost.
-            if len(calls) == 1 and calls[0].name == "agent":
-                only_result = blocked.get(0) or dispatched.get(0)
+            # Fast-path: when any `agent` tool call in this batch spawns a
+            # background task, tool outputs are already user-ready. Skip the
+            # extra LLM round-trip that usually adds redundant narration.
+            spawned_background = False
+            for idx, call in enumerate(calls):
+                result = blocked.get(idx) or dispatched.get(idx)
+                if result is None or result.is_error:
+                    continue
                 if (
-                    only_result is not None
-                    and isinstance(only_result.content, str)
-                    and only_result.content.startswith("Agent spawned in background.")
-                    and not only_result.is_error
+                    call.name == "agent"
+                    and isinstance(result.content, str)
+                    and result.content.startswith("Agent spawned in background.")
                 ):
-                    yield TextChunk(text=only_result.content)
-                    yield TurnComplete(usage=response.usage)
-                    yield from self._maybe_compact()
-                    self._persist()
-                    return
+                    spawned_background = True
+                    break
+
+            if spawned_background:
+                yield TurnComplete(usage=response.usage)
+                yield from self._maybe_compact()
+                self._persist()
+                return
 
             parallel_count = len(runnable_calls)
             if parallel_count > 1:
