@@ -150,6 +150,15 @@ class TestThemeConfig:
         # Unchanged defaults
         assert cfg.theme.assistant_color == "green"
 
+    def test_policy_profile_valid_values(self):
+        for p in ("strict", "balanced", "dev"):
+            cfg = TauConfig(policy_profile=p)
+            assert cfg.policy_profile == p
+
+    def test_policy_profile_invalid_value_raises(self):
+        with pytest.raises(ValueError):
+            TauConfig(policy_profile="unknown")
+
 
 class TestThemeObject:
     def test_theme_load_from_config(self):

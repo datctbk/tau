@@ -5,6 +5,7 @@ import logging
 import re
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 import click
@@ -18,6 +19,8 @@ from rich.text import Text
 from tau.config import TauConfig, ensure_tau_home, load_config, get_theme_file_paths
 from tau.core.agent import Agent
 from tau.core.context import ContextManager
+from tau.core.audit import append_audit_record
+from tau.core.assistant_events import append_assistant_event, make_assistant_event
 from tau.core.extension import ExtensionContext, ExtensionRegistry
 from tau.core.session import SessionManager
 from tau.core.steering import SteeringChannel
@@ -26,6 +29,7 @@ from tau.core.types import (
     AgentConfig,
     CompactionEvent,
     CostLimitExceeded,
+    PolicyDecisionEvent,
     ErrorEvent,
     ExtensionLoadError,
     RetryEvent,
@@ -241,6 +245,7 @@ def _build_agent(
     session_name: str | None,
     resume_id: str | None,
     confirm_hook: Callable[[str], bool] | None = None,
+    policy_approval_hook: Callable[[str], bool] | None = None,
     steering: SteeringChannel | None = None,
     tools_filter: str | None = None,
 ) -> tuple[Agent, ExtensionRegistry]:
@@ -346,6 +351,7 @@ def _build_agent(
         session_manager=session_manager,
         steering=steering,
         cost_calculator=tau_config.calculate_cost,
+        policy_approval_hook=policy_approval_hook,
     )
     return agent, ext_registry
 
@@ -383,6 +389,8 @@ def _make_agent_config(
         parallel_tools_max_workers=tau_config.parallel_tools_max_workers,
         max_cost=max_cost if max_cost is not None else tau_config.max_cost,
         memory_topk=max(0, topk),
+        policy_enabled=tau_config.policy_enabled,
+        policy_profile=tau_config.policy_profile,
     )
 
 # ---------------------------------------------------------------------------
@@ -711,6 +719,19 @@ def _render_events(
                 _writeln(f"  ⚠ budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f} — stopping session")
             else:
                 console.print(f"[bold red]  ⚠ budget exceeded: ${event.session_cost:.3f} >= ${event.max_cost:.3f} — stopping session[/bold red]")
+        elif isinstance(event, PolicyDecisionEvent):
+            _stop_spinner()
+            _flush_stream(end_line=True)
+            if event.decision == "block":
+                _writeln(f"  ⛔ policy blocked {event.action} ({event.risk}): {event.reason}")
+            elif event.decision == "confirm":
+                _writeln(f"  ❓ approval requested for {event.action} ({event.risk}): {event.reason}")
+            elif event.decision == "approved":
+                _writeln(f"  ✅ approval granted for {event.action} ({event.risk})")
+            elif event.decision == "denied":
+                _writeln(f"  ⛔ approval denied for {event.action} ({event.risk}): {event.reason}")
+            else:
+                _writeln(f"  ✓ policy allowed {event.action} ({event.risk})")
     _kill_spinner()
     _flush_stream(end_line=True)
 
@@ -786,6 +807,7 @@ _SLASH_HELP = (
     "  /model <name>  hot-swap the model for this session\n"
     "  /think <level> hot-swap the reasoning effort (off, low, medium, high)\n"
     "  /tokens        show current token usage\n"
+    "  /checkpoint [label]  save a checkpoint snapshot for resume/planning\n"
     "  /tree          browse & branch the session history in-place\n"
     "  /fork [name]   fork session at current position into a named branch\n"
     "  /bookmark      list bookmarks for current session\n"
@@ -2175,6 +2197,68 @@ def _handle_slash(
             ))
         return True
 
+    if keyword == "/checkpoint":
+        if agent is None:
+            _print("[dim]  /checkpoint requires an active session.[/dim]")
+            return True
+        label = arg.strip() if arg.strip() else ""
+        ts = datetime.now(timezone.utc)
+        stamp = ts.strftime("%Y%m%d_%H%M%S")
+        safe_label = re.sub(r"[^a-zA-Z0-9_-]+", "-", label).strip("-")[:40]
+        name = f"{stamp}_{safe_label}.json" if safe_label else f"{stamp}.json"
+
+        cp_dir = Path(agent._config.workspace_root) / ".tau" / "checkpoints"
+        cp_dir.mkdir(parents=True, exist_ok=True)
+        cp_file = cp_dir / name
+
+        messages = agent._context.get_messages()
+        recent = [
+            {
+                "role": m.role,
+                "content": (m.content or "")[:300],
+            }
+            for m in messages[-8:]
+        ]
+        payload = {
+            "timestamp": ts.isoformat(),
+            "label": label,
+            "session_id": agent._session.id,
+            "model": agent._config.model,
+            "provider": agent._config.provider,
+            "token_count": agent._context.token_count(),
+            "message_count": len(messages),
+            "queue_size": steering.queue_size(),
+            "recent_messages": recent,
+        }
+        cp_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        append_audit_record(
+            agent._config.workspace_root,
+            "checkpoint.created",
+            {
+                "checkpoint_file": str(cp_file),
+                "label": label,
+                "session_id": agent._session.id,
+            },
+        )
+        append_assistant_event(
+            agent._config.workspace_root,
+            make_assistant_event(
+                family="workflow",
+                name="checkpoint.created",
+                payload={
+                    "checkpoint_file": str(cp_file),
+                    "label": label,
+                },
+                session_id=agent._session.id,
+                severity="info",
+            ),
+        )
+        _print(Text.assemble(
+            ("  ✓ checkpoint saved: ", Style(color="green", bold=True)),
+            (str(cp_file), Style(color="cyan")),
+        ))
+        return True
+
     if keyword == "/tree":
         if agent is None:
             _print("[dim]  /tree requires an active session.[/dim]")
@@ -2939,6 +3023,11 @@ def run_cmd(
     if mode in ("print", "json", "rpc"):
         tau_config.shell.require_confirmation = False
 
+    def _policy_approval_prompt(reason: str) -> bool:
+        if mode in ("print", "json", "rpc"):
+            return False
+        return click.confirm(f"Policy approval required: {reason} Proceed?", default=False)
+
     agent, ext_registry = _build_agent(
         tau_config=tau_config,
         agent_config=agent_config,
@@ -2947,6 +3036,7 @@ def run_cmd(
         resume_id=resume_id,
         steering=steering,
         tools_filter=tools_filter,
+        policy_approval_hook=_policy_approval_prompt,
     )
 
     # Expand @file references in the prompt (single-shot mode)

@@ -245,6 +245,8 @@ class TauConfig(BaseSettings):
     parallel_tools: bool = True
     parallel_tools_max_workers: int = 8
     max_cost: float = 0.0  # USD budget ceiling; 0 = unlimited
+    policy_enabled: bool = True
+    policy_profile: str = "balanced"
 
     # provider sub-configs
     openai: OpenAIProviderConfig = OpenAIProviderConfig()
@@ -274,6 +276,14 @@ class TauConfig(BaseSettings):
     def validate_compaction_threshold(cls, v: float) -> float:
         if not 0.40 <= v <= 0.90:
             raise ValueError("compaction_threshold must be between 0.40 and 0.90")
+        return v
+
+    @field_validator("policy_profile")
+    @classmethod
+    def validate_policy_profile(cls, v: str) -> str:
+        allowed = {"strict", "balanced", "dev"}
+        if v not in allowed:
+            raise ValueError(f"policy_profile must be one of {allowed}")
         return v
 
     def calculate_cost(self, model: str, usage_in: Any) -> float:

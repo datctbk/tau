@@ -204,6 +204,9 @@ class AgentConfig:
     max_cost: float = 0.0  # USD ceiling; 0 = unlimited
     # --- memory retrieval ---
     memory_topk: int = 0  # 0 = disabled; >0 enables top-k dynamic memory retrieval
+    # --- policy scaffold ---
+    policy_enabled: bool = True
+    policy_profile: Literal["strict", "balanced", "dev"] = "balanced"
 
 # ---------------------------------------------------------------------------
 # Compaction
@@ -328,6 +331,25 @@ class CostLimitExceeded:
 
 
 @dataclass
+class PolicyDecisionEvent:
+    """Emitted when policy evaluates and blocks/allows sensitive actions."""
+
+    action: str
+    decision: Literal["allow", "block", "confirm", "approved", "denied"]
+    risk: str = "low"
+    reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": "policy_decision",
+            "action": self.action,
+            "decision": self.decision,
+            "risk": self.risk,
+            "reason": self.reason,
+        }
+
+
+@dataclass
 class SteerEvent:
     """Emitted when the user steers mid-stream (current response discarded)."""
     new_input: str          # the injected user message
@@ -381,5 +403,6 @@ Event = Union[
     RetryEvent,
     SteerEvent,
     CostLimitExceeded,
+    PolicyDecisionEvent,
     ExtensionLoadError,
 ]

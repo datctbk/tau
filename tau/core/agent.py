@@ -11,6 +11,7 @@ from tau.core.types import (
     AgentConfig,
     CompactionEvent,
     CostLimitExceeded,
+    PolicyDecisionEvent,
     ErrorEvent,
     Event,
     Message,
@@ -30,6 +31,9 @@ from tau.core.types import (
     ToolResult,
 )
 from tau.core import trace as _trace
+from tau.core.audit import append_audit_record
+from tau.core.assistant_events import append_assistant_event, make_assistant_event
+from tau.core.policy import DefaultToolPolicyHook
 
 if TYPE_CHECKING:
     from tau.core.context import ContextManager
@@ -93,6 +97,7 @@ class Agent:
         steering: "SteeringChannel | None" = None,
         ext_registry: "ExtensionRegistry | None" = None,
         cost_calculator: "Callable[[str, object], float] | None" = None,
+        policy_approval_hook: "Callable[[str], bool] | None" = None,
     ) -> None:
         self._config = config
         self._provider = provider
@@ -103,6 +108,12 @@ class Agent:
         self._session_manager = session_manager
         self._steering = steering
         self._cost_calculator = cost_calculator
+        self._policy_approval_hook = policy_approval_hook
+        self._policy_hook = (
+            DefaultToolPolicyHook(profile=config.policy_profile)
+            if config.policy_enabled
+            else None
+        )
 
     # ------------------------------------------------------------------
     # Tool dispatch (parallel or sequential)
@@ -244,9 +255,163 @@ class Agent:
             # ── Before-hooks (sequential, main thread) ────────────────
             calls = response.tool_calls
             blocked: dict[int, ToolResult] = {}   # idx → blocked result
-            if self._ext_registry:
-                for idx, call in enumerate(calls):
-                    yield ToolCallEvent(call=call)
+            for idx, call in enumerate(calls):
+                yield ToolCallEvent(call=call)
+
+                # Phase A policy scaffold: allow future policy engines to block tool calls.
+                if self._policy_hook is not None:
+                    decision = self._policy_hook.before_tool_call(agent=self, call=call)
+                    if decision.requires_approval:
+                        reason = decision.reason or f"Approval required by policy ({decision.risk}): {call.name}"
+                        if self._policy_approval_hook is None:
+                            # Non-interactive or legacy contexts without approval hook:
+                            # allow execution to preserve backward compatibility.
+                            pass
+                        else:
+                            yield PolicyDecisionEvent(
+                                action=call.name,
+                                decision="confirm",
+                                risk=decision.risk,
+                                reason=reason,
+                            )
+                            append_assistant_event(
+                                self._config.workspace_root,
+                                make_assistant_event(
+                                    family="policy",
+                                    name="approval_requested",
+                                    payload={
+                                        "tool": call.name,
+                                        "tool_call_id": call.id,
+                                        "risk": decision.risk,
+                                        "reason": reason,
+                                    },
+                                    session_id=getattr(self._session, "id", ""),
+                                    severity="warning",
+                                ),
+                            )
+                            append_audit_record(
+                                self._config.workspace_root,
+                                "policy.approval_requested",
+                                {
+                                    "tool": call.name,
+                                    "tool_call_id": call.id,
+                                    "risk": decision.risk,
+                                    "reason": reason,
+                                },
+                            )
+
+                            approved = bool(self._policy_approval_hook(reason))
+                            if approved:
+                                yield PolicyDecisionEvent(
+                                    action=call.name,
+                                    decision="approved",
+                                    risk=decision.risk,
+                                    reason=reason,
+                                )
+                                append_assistant_event(
+                                    self._config.workspace_root,
+                                    make_assistant_event(
+                                        family="policy",
+                                        name="approved",
+                                        payload={
+                                            "tool": call.name,
+                                            "tool_call_id": call.id,
+                                            "risk": decision.risk,
+                                        },
+                                        session_id=getattr(self._session, "id", ""),
+                                        severity="info",
+                                    ),
+                                )
+                                append_audit_record(
+                                    self._config.workspace_root,
+                                    "policy.approved",
+                                    {
+                                        "tool": call.name,
+                                        "tool_call_id": call.id,
+                                        "risk": decision.risk,
+                                    },
+                                )
+                            else:
+                                deny_reason = f"Approval denied: {reason}"
+                                yield PolicyDecisionEvent(
+                                    action=call.name,
+                                    decision="denied",
+                                    risk=decision.risk,
+                                    reason=deny_reason,
+                                )
+                                append_assistant_event(
+                                    self._config.workspace_root,
+                                    make_assistant_event(
+                                        family="policy",
+                                        name="denied",
+                                        payload={
+                                            "tool": call.name,
+                                            "tool_call_id": call.id,
+                                            "risk": decision.risk,
+                                            "reason": deny_reason,
+                                        },
+                                        session_id=getattr(self._session, "id", ""),
+                                        severity="warning",
+                                    ),
+                                )
+                                append_audit_record(
+                                    self._config.workspace_root,
+                                    "policy.denied",
+                                    {
+                                        "tool": call.name,
+                                        "tool_call_id": call.id,
+                                        "risk": decision.risk,
+                                        "reason": deny_reason,
+                                    },
+                                )
+                                blocked[idx] = ToolResult(
+                                    tool_call_id=call.id,
+                                    content=deny_reason,
+                                    is_error=True,
+                                )
+                                continue
+
+                    if not decision.allow:
+                        reason = decision.reason or f"Blocked by policy ({decision.risk}): {call.name}"
+                        yield PolicyDecisionEvent(
+                            action=call.name,
+                            decision="block",
+                            risk=decision.risk,
+                            reason=reason,
+                        )
+                        append_assistant_event(
+                            self._config.workspace_root,
+                            make_assistant_event(
+                                family="policy",
+                                name="blocked",
+                                payload={
+                                    "tool": call.name,
+                                    "tool_call_id": call.id,
+                                    "risk": decision.risk,
+                                    "reason": reason,
+                                },
+                                session_id=getattr(self._session, "id", ""),
+                                severity="warning",
+                            ),
+                        )
+                        append_audit_record(
+                            self._config.workspace_root,
+                            "policy.blocked",
+                            {
+                                "tool": call.name,
+                                "tool_call_id": call.id,
+                                "risk": decision.risk,
+                                "reason": reason,
+                            },
+                        )
+                        blocked[idx] = ToolResult(
+                            tool_call_id=call.id,
+                            content=reason,
+                            is_error=True,
+                        )
+                        continue
+
+                if self._ext_registry:
                     ctx = BeforeToolCallContext(tool_call=call, agent=self)
                     res = self._ext_registry.fire_before_tool_call(ctx)
                     if res and res.block:
@@ -254,9 +419,6 @@ class Agent:
                         blocked[idx] = ToolResult(
                             tool_call_id=call.id, content=err_msg, is_error=True
                         )
-            else:
-                for call in calls:
-                    yield ToolCallEvent(call=call)
 
             # ── Parallel dispatch (only non-blocked calls) ─────────────
             runnable_idx = [i for i in range(len(calls)) if i not in blocked]

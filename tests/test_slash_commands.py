@@ -1,6 +1,7 @@
 """Tests for REPL slash commands: /clear, /compact, /model, /tokens, /help."""
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -318,6 +319,48 @@ class TestSlashTokens:
     def test_no_op_without_agent(self):
         handled, _ = _call("/tokens", agent=None)
         assert handled is True
+
+
+# ===========================================================================
+# /checkpoint
+# ===========================================================================
+
+class TestSlashCheckpoint:
+    def test_returns_true(self, tmp_path):
+        agent = _make_agent(_cfg(workspace_root=str(tmp_path)))
+        handled, _ = _call("/checkpoint", agent)
+        assert handled is True
+
+    def test_writes_checkpoint_file(self, tmp_path):
+        agent = _make_agent(_cfg(workspace_root=str(tmp_path)))
+        agent._context.add_message(Message(role="user", content="hello"))
+        _call("/checkpoint", agent)
+
+        cp_dir = tmp_path / ".tau" / "checkpoints"
+        files = list(cp_dir.glob("*.json"))
+        assert len(files) == 1
+        payload = json.loads(files[0].read_text(encoding="utf-8"))
+        assert payload["session_id"] == "test-session"
+        assert "token_count" in payload
+        assert "recent_messages" in payload
+
+        audit_file = tmp_path / ".tau" / "audit" / "assistant-actions.jsonl"
+        assert audit_file.exists()
+        txt = audit_file.read_text(encoding="utf-8")
+        assert "checkpoint.created" in txt
+
+        evt_file = tmp_path / ".tau" / "events" / "assistant-events.jsonl"
+        assert evt_file.exists()
+        evt = evt_file.read_text(encoding="utf-8")
+        assert '"family": "workflow"' in evt
+        assert '"name": "checkpoint.created"' in evt
+
+    def test_label_in_filename(self, tmp_path):
+        agent = _make_agent(_cfg(workspace_root=str(tmp_path)))
+        _call("/checkpoint sprint-auth-fix", agent)
+        cp_dir = tmp_path / ".tau" / "checkpoints"
+        files = list(cp_dir.glob("*_sprint-auth-fix.json"))
+        assert len(files) == 1
 
     def test_empty_context_shows_zero_percent(self):
         """No messages beyond system prompt → near-zero usage."""

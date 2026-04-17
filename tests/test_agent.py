@@ -1,10 +1,12 @@
 """Tests for the agent loop using a mock provider."""
 from __future__ import annotations
 import time
+import tempfile
 import pytest
 from unittest.mock import MagicMock
 from tau.core.agent import Agent
 from tau.core.context import ContextManager
+from tau.core.policy import PolicyDecision
 from tau.core.session import SessionManager
 from tau.core.tool_registry import ToolRegistry
 from tau.core.types import (
@@ -21,6 +23,7 @@ from tau.core.types import (
     ToolResult,
     ToolResultEvent,
     TurnComplete,
+    PolicyDecisionEvent,
 )
 
 # ---------------------------------------------------------------------------
@@ -137,6 +140,132 @@ def test_unknown_tool_returns_error_result():
     events = list(agent.run("call unknown"))
     error_results = [e for e in events if isinstance(e, ToolResultEvent) and e.result.is_error]
     assert len(error_results) == 1
+
+
+def test_policy_hook_can_block_tool_call_before_dispatch():
+    call = ToolCall(id="c3", name="say_hi", arguments={"name": "tau"})
+    handler = MagicMock(return_value="hi tau")
+    tool = ToolDefinition(
+        name="say_hi",
+        description="greet",
+        parameters={"name": ToolParameter(type="string", description="name")},
+        handler=handler,
+    )
+    ws = tempfile.mkdtemp(prefix="tau-policy-block-")
+    agent = _make_agent(
+        provider_responses=[
+            ProviderResponse(content=None, tool_calls=[call], stop_reason="tool_use", usage=TokenUsage()),
+            ProviderResponse(content="done", tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+        ],
+        extra_tools=[tool],
+        config=_config(workspace_root=ws),
+    )
+
+    class _DenyPolicy:
+        def before_tool_call(self, *, agent, call):
+            _ = agent
+            _ = call
+            return PolicyDecision(allow=False, reason="Blocked by test policy", risk="high")
+
+    agent._policy_hook = _DenyPolicy()
+    events = list(agent.run("greet tau"))
+    policy_events = [e for e in events if isinstance(e, PolicyDecisionEvent)]
+    assert len(policy_events) == 1
+    assert policy_events[0].decision == "block"
+    results = [e for e in events if isinstance(e, ToolResultEvent)]
+    assert len(results) == 1
+    assert results[0].result.is_error is True
+    assert "Blocked by test policy" in results[0].result.content
+    handler.assert_not_called()
+
+    audit_file = agent._config.workspace_root + "/.tau/audit/assistant-actions.jsonl"
+    with open(audit_file, "r", encoding="utf-8") as f:
+        txt = f.read()
+    assert "policy.blocked" in txt
+
+    event_file = agent._config.workspace_root + "/.tau/events/assistant-events.jsonl"
+    with open(event_file, "r", encoding="utf-8") as f:
+        evt = f.read()
+    assert '"family": "policy"' in evt
+    assert '"name": "blocked"' in evt
+
+
+def test_policy_approval_granted_executes_tool():
+    call = ToolCall(id="c4", name="write_file", arguments={"path": "x", "content": "y"})
+    handler = MagicMock(return_value="ok")
+    tool = ToolDefinition(
+        name="write_file",
+        description="write",
+        parameters={
+            "path": ToolParameter(type="string", description="p"),
+            "content": ToolParameter(type="string", description="c"),
+        },
+        handler=handler,
+    )
+    agent = _make_agent(
+        provider_responses=[
+            ProviderResponse(content=None, tool_calls=[call], stop_reason="tool_use", usage=TokenUsage()),
+            ProviderResponse(content="done", tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+        ],
+        extra_tools=[tool],
+    )
+
+    class _ApprovePolicy:
+        def before_tool_call(self, *, agent, call):
+            _ = agent
+            _ = call
+            from tau.core.policy import PolicyDecision
+            return PolicyDecision(allow=True, requires_approval=True, risk="medium", reason="needs approval")
+
+    agent._policy_hook = _ApprovePolicy()
+    agent._policy_approval_hook = lambda reason: True
+    events = list(agent.run("do write"))
+    decisions = [e for e in events if isinstance(e, PolicyDecisionEvent)]
+    assert any(d.decision == "confirm" for d in decisions)
+    assert any(d.decision == "approved" for d in decisions)
+    results = [e for e in events if isinstance(e, ToolResultEvent)]
+    assert len(results) == 1
+    assert results[0].result.is_error is False
+    handler.assert_called_once()
+
+
+def test_policy_approval_denied_blocks_tool():
+    call = ToolCall(id="c5", name="write_file", arguments={"path": "x", "content": "y"})
+    handler = MagicMock(return_value="ok")
+    tool = ToolDefinition(
+        name="write_file",
+        description="write",
+        parameters={
+            "path": ToolParameter(type="string", description="p"),
+            "content": ToolParameter(type="string", description="c"),
+        },
+        handler=handler,
+    )
+    agent = _make_agent(
+        provider_responses=[
+            ProviderResponse(content=None, tool_calls=[call], stop_reason="tool_use", usage=TokenUsage()),
+            ProviderResponse(content="done", tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+        ],
+        extra_tools=[tool],
+    )
+
+    class _ApprovePolicy:
+        def before_tool_call(self, *, agent, call):
+            _ = agent
+            _ = call
+            from tau.core.policy import PolicyDecision
+            return PolicyDecision(allow=True, requires_approval=True, risk="medium", reason="needs approval")
+
+    agent._policy_hook = _ApprovePolicy()
+    agent._policy_approval_hook = lambda reason: False
+    events = list(agent.run("do write"))
+    decisions = [e for e in events if isinstance(e, PolicyDecisionEvent)]
+    assert any(d.decision == "confirm" for d in decisions)
+    assert any(d.decision == "denied" for d in decisions)
+    results = [e for e in events if isinstance(e, ToolResultEvent)]
+    assert len(results) == 1
+    assert results[0].result.is_error is True
+    handler.assert_not_called()
 
 
 def test_max_turns_yields_error_event():
