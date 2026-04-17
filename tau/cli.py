@@ -2635,6 +2635,23 @@ def _repl(
         confirm_answered.wait()
         return confirm_result[0]
 
+    def _tui_policy_confirm(reason: str) -> bool:
+        """Policy approval hook for TUI mode.
+
+        Reuses the same in-buffer y/N flow as shell confirmation so prompt_toolkit
+        keeps ownership of terminal input.
+        """
+        _append_output(
+            f"\n{_BOLD}{_YELLOW}  ? policy approval requested{_RESET}"
+            f"\n\n    {_CYAN}{reason}{_RESET}\n\n"
+        )
+        confirm_answered.clear()
+        confirm_pending.set()
+        if app_ref[0]:
+            app_ref[0].invalidate()
+        confirm_answered.wait()
+        return confirm_result[0]
+
     def _run_agent(user_input: str) -> None:
         agent_running.set()
         cancel_requested.clear()
@@ -2849,6 +2866,8 @@ def _repl(
     # -- wire TUI confirm hook into shell module -----------------------------
     from tau.tools import shell as _shell_mod
     _shell_mod._confirm_hook = _tui_confirm
+    # Route policy approvals through the same TUI confirmation path.
+    agent._policy_approval_hook = _tui_policy_confirm
 
     # -- layout --------------------------------------------------------------
     input_window = Window(
@@ -3026,7 +3045,23 @@ def run_cmd(
     def _policy_approval_prompt(reason: str) -> bool:
         if mode in ("print", "json", "rpc"):
             return False
-        return click.confirm(f"Policy approval required: {reason} Proceed?", default=False)
+
+        prompt = f"Policy approval required: {reason} Proceed? [y/N]: "
+        while True:
+            try:
+                # Use plain stdin read so prompts remain usable even when terminal
+                # state is controlled by richer REPL input handlers.
+                click.echo(prompt, nl=False)
+                raw = input().strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                click.echo()
+                return False
+
+            if raw in ("", "n", "no"):
+                return False
+            if raw in ("y", "yes"):
+                return True
+            click.echo("Please enter 'y' or 'n'.")
 
     agent, ext_registry = _build_agent(
         tau_config=tau_config,
