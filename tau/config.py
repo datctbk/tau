@@ -247,6 +247,11 @@ class TauConfig(BaseSettings):
     max_cost: float = 0.0  # USD budget ceiling; 0 = unlimited
     policy_enabled: bool = True
     policy_profile: str = "balanced"
+    # --- optional prompt budget controls (off by default) ---
+    prompt_budget_enabled: bool = False
+    prompt_budget_max_input_tokens: int = 3200
+    prompt_budget_output_reserve: int = 1000
+    prompt_budget_max_tools_total: int = 12
 
     # provider sub-configs
     openai: OpenAIProviderConfig = OpenAIProviderConfig()

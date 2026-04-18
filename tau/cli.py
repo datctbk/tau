@@ -228,6 +228,15 @@ _AGENT_OPTIONS = [
         ),
     ),
     click.option("--topk", type=int, default=0, show_default=True, help="Top-k relevant memory entries to inject per turn (0 disables)."),
+    click.option(
+        "--prompt-budget/--no-prompt-budget",
+        "prompt_budget",
+        default=None,
+        help=(
+            "Enable prompt budget mode (dynamic message/tool capping). "
+            "Default follows config and is off unless enabled."
+        ),
+    ),
 ]
 
 def _agent_options(fn):
@@ -366,6 +375,7 @@ def _make_agent_config(
     persistent_shell: bool = False,
     max_cost: float | None = None,
     topk: int = 0,
+    prompt_budget: bool | None = None,
 ) -> AgentConfig:
     if provider:
         tau_config.provider = provider
@@ -373,6 +383,8 @@ def _make_agent_config(
         tau_config.shell.require_confirmation = False
     if persistent_shell:
         tau_config.shell.use_persistent_shell = True
+    if prompt_budget is not None:
+        tau_config.prompt_budget_enabled = bool(prompt_budget)
     return AgentConfig(
         provider=tau_config.provider,
         model=model or tau_config.model,
@@ -391,6 +403,10 @@ def _make_agent_config(
         memory_topk=max(0, topk),
         policy_enabled=tau_config.policy_enabled,
         policy_profile=tau_config.policy_profile,
+        prompt_budget_enabled=bool(tau_config.prompt_budget_enabled),
+        prompt_budget_max_input_tokens=max(512, int(tau_config.prompt_budget_max_input_tokens)),
+        prompt_budget_output_reserve=max(0, int(tau_config.prompt_budget_output_reserve)),
+        prompt_budget_max_tools_total=max(1, int(tau_config.prompt_budget_max_tools_total)),
     )
 
 # ---------------------------------------------------------------------------
@@ -2970,7 +2986,8 @@ def run_cmd(
     no_session: bool,
     trace_log: str | None,
     tools_filter: str | None,
-    topk: int,
+    topk: int = 0,
+    prompt_budget: bool | None = None,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
     # Split args into @file tokens and plain text tokens.
@@ -3027,7 +3044,19 @@ def run_cmd(
     ensure_tau_home()
     tau_config = load_config()
     theme.load(tau_config)
-    agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, persistent_shell, max_cost, topk)
+    agent_config = _make_agent_config(
+        tau_config=tau_config,
+        provider=provider,
+        model=model,
+        think=think,
+        no_confirm=no_confirm,
+        workspace=workspace,
+        no_parallel=no_parallel,
+        persistent_shell=persistent_shell,
+        max_cost=max_cost,
+        topk=topk,
+        prompt_budget=prompt_budget,
+    )
     if no_session:
         from tau.sdk import InMemorySessionManager
         session_manager = InMemorySessionManager()
@@ -3188,7 +3217,8 @@ def sessions_fork(
     output_mode: str | None, print_mode: bool,
     template_name: str | None, var: tuple[str, ...],
     max_cost: float | None, no_session: bool,
-    topk: int,
+    topk: int = 0,
+    prompt_budget: bool | None = None,
 ) -> None:
     from tau.core.session import local_sessions_dir
     sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
@@ -3210,7 +3240,18 @@ def sessions_fork(
         _setup_logging(verbose)
         ensure_tau_home()
         tau_config = load_config()
-        agent_config = _make_agent_config(tau_config, provider, model, think, no_confirm, workspace, no_parallel, max_cost=max_cost, topk=topk)
+        agent_config = _make_agent_config(
+            tau_config=tau_config,
+            provider=provider,
+            model=model,
+            think=think,
+            no_confirm=no_confirm,
+            workspace=workspace,
+            no_parallel=no_parallel,
+            max_cost=max_cost,
+            topk=topk,
+            prompt_budget=prompt_budget,
+        )
         steering = SteeringChannel()
         agent, ext_reg = _build_agent(
             tau_config=tau_config, agent_config=agent_config,
@@ -3283,7 +3324,8 @@ def sessions_import(
     max_cost: float | None,
     no_session: bool,
     trace_log: str | None,
-    topk: int,
+    topk: int = 0,
+    prompt_budget: bool | None = None,
 ) -> None:
     """Import a previously-exported JSON session file."""
     import uuid
@@ -3318,8 +3360,17 @@ def sessions_import(
         ensure_tau_home()
         tau_config = load_config()
         agent_config = _make_agent_config(
-            tau_config, provider, model, think, no_confirm, workspace, no_parallel,
-            persistent_shell, max_cost=max_cost, topk=topk,
+            tau_config=tau_config,
+            provider=provider,
+            model=model,
+            think=think,
+            no_confirm=no_confirm,
+            workspace=workspace,
+            no_parallel=no_parallel,
+            persistent_shell=persistent_shell,
+            max_cost=max_cost,
+            topk=topk,
+            prompt_budget=prompt_budget,
         )
         steering = SteeringChannel()
         agent, ext_reg = _build_agent(

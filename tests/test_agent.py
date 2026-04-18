@@ -12,6 +12,7 @@ from tau.core.tool_registry import ToolRegistry
 from tau.core.types import (
     AgentConfig,
     ErrorEvent,
+    Message,
     ProviderResponse,
     TextChunk,
     TextDelta,
@@ -363,6 +364,68 @@ def test_streaming_usage_reported():
     tc = next(e for e in events if isinstance(e, TurnComplete))
     assert tc.usage.input_tokens == 55
     assert tc.usage.output_tokens == 3
+
+
+def test_prompt_budget_disabled_keeps_all_tools():
+    extra_tools = [
+        ToolDefinition(
+            name=f"tool_{i}",
+            description=f"helper tool {i}",
+            parameters={},
+            handler=lambda i=i: f"ok-{i}",
+        )
+        for i in range(15)
+    ]
+    cfg = _config(prompt_budget_enabled=False)
+    agent = _make_agent(
+        provider_responses=[
+            ProviderResponse(content="ok", tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+        ],
+        extra_tools=extra_tools,
+        config=cfg,
+    )
+    list(agent.run("hello"))
+    sent_tools = agent._provider.chat.call_args.kwargs["tools"]
+    assert len(sent_tools) == 15
+
+
+def test_prompt_budget_enabled_caps_tools_and_trims_messages():
+    extra_tools = [
+        ToolDefinition(
+            name=f"tool_{i}",
+            description=f"helper tool {i}",
+            parameters={},
+            handler=lambda i=i: f"ok-{i}",
+        )
+        for i in range(20)
+    ]
+    cfg = _config(
+        prompt_budget_enabled=True,
+        prompt_budget_max_tools_total=5,
+        prompt_budget_max_input_tokens=120,
+        prompt_budget_output_reserve=80,
+    )
+    agent = _make_agent(
+        provider_responses=[
+            ProviderResponse(content="ok", tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+        ],
+        extra_tools=extra_tools,
+        config=cfg,
+    )
+    # Seed context with enough history so budget mode must trim.
+    for i in range(14):
+        agent._context.add_message(
+            Message(role="user", content=f"history line {i} " * 20)
+        )
+    before_count = len(agent._context.get_messages())
+
+    list(agent.run("please use tool_19 for this task"))
+    sent_messages = agent._provider.chat.call_args.kwargs["messages"]
+    sent_tools = agent._provider.chat.call_args.kwargs["tools"]
+
+    assert len(sent_tools) <= 5
+    assert len(sent_messages) <= before_count + 1
+    assert any(t.name == "tool_19" for t in sent_tools)
 
 
 # ---------------------------------------------------------------------------

@@ -358,6 +358,23 @@ class TestNoSessionCLI:
 
 
 class TestMaxCostCLI:
+    def test_prompt_budget_flag_overrides_config(self):
+        """CLI prompt-budget flag should override TauConfig default."""
+        from tau.config import TauConfig
+        import tau.cli as cli_mod
+
+        tau_config = TauConfig(prompt_budget_enabled=False)
+        cfg = cli_mod._make_agent_config(
+            tau_config,
+            provider=None,
+            model=None,
+            think=None,
+            no_confirm=False,
+            workspace=".",
+            prompt_budget=True,
+        )
+        assert cfg.prompt_budget_enabled is True
+
     def test_max_cost_passed_to_agent_config(self):
         """--max-cost value should land in AgentConfig.max_cost."""
         from tau.config import TauConfig

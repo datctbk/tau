@@ -207,6 +207,11 @@ class AgentConfig:
     # --- policy scaffold ---
     policy_enabled: bool = True
     policy_profile: Literal["strict", "balanced", "dev"] = "balanced"
+    # --- optional prompt budget mode ---
+    prompt_budget_enabled: bool = False
+    prompt_budget_max_input_tokens: int = 3200
+    prompt_budget_output_reserve: int = 1000
+    prompt_budget_max_tools_total: int = 12
 
 # ---------------------------------------------------------------------------
 # Compaction

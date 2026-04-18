@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Generator, Iterator, TYPE_CHECKING
@@ -18,6 +19,7 @@ from tau.core.types import (
     ProviderResponse,
     RetryEvent,
     SteerEvent,
+    ToolDefinition,
     TextChunk,
     TextDelta,
     ToolCall,
@@ -34,6 +36,7 @@ from tau.core import trace as _trace
 from tau.core.audit import append_audit_record
 from tau.core.assistant_events import append_assistant_event, make_assistant_event
 from tau.core.policy import DefaultToolPolicyHook
+from tau.core.context import _messages_tokens
 
 if TYPE_CHECKING:
     from tau.core.context import ContextManager
@@ -114,6 +117,90 @@ class Agent:
             if config.policy_enabled
             else None
         )
+
+    @staticmethod
+    def _tokenize(text: str) -> set[str]:
+        return {x for x in re.findall(r"[a-z0-9_]+", (text or "").lower()) if x}
+
+    def _trim_messages_for_prompt_budget(self, messages: list[Message], budget: int) -> list[Message]:
+        if _messages_tokens(messages) <= budget:
+            return messages
+        system = [m for m in messages if m.role == "system"]
+        non_system = [m for m in messages if m.role != "system"]
+        if not non_system:
+            return system
+
+        # Keep a contiguous recent window from the tail.
+        kept_rev: list[Message] = []
+        for msg in reversed(non_system):
+            trial_rev = kept_rev + [msg]
+            trial = system + list(reversed(trial_rev))
+            if _messages_tokens(trial) <= budget or not kept_rev:
+                kept_rev = trial_rev
+            else:
+                break
+        return system + list(reversed(kept_rev))
+
+    def _select_tools_for_prompt_budget(
+        self,
+        tools: list[ToolDefinition],
+        *,
+        query_text: str,
+        max_tools: int,
+    ) -> list[ToolDefinition]:
+        if max_tools <= 0:
+            return []
+        if len(tools) <= max_tools:
+            return tools
+
+        query_tokens = self._tokenize(query_text)
+        baseline_tools = {
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_dir",
+            "search_files",
+            "grep",
+            "find",
+            "ls",
+            "run_bash",
+        }
+        scored: list[tuple[float, int, ToolDefinition]] = []
+        for idx, tool in enumerate(tools):
+            corpus = f"{tool.name} {tool.description}"
+            overlap = len(self._tokenize(corpus) & query_tokens)
+            score = float(overlap)
+            if tool.name in baseline_tools:
+                score += 0.25
+            scored.append((score, idx, tool))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        selected = [row[2] for row in scored[:max_tools]]
+        return selected
+
+    def _prepare_request_payload(self) -> tuple[list[Message], list[ToolDefinition]]:
+        messages = self._context.get_messages()
+        tools = self._registry.all_definitions()
+        if not self._config.prompt_budget_enabled:
+            return messages, tools
+
+        max_input = max(512, int(self._config.prompt_budget_max_input_tokens))
+        reserve = max(0, int(self._config.prompt_budget_output_reserve))
+        input_budget = max(256, max_input - reserve)
+        budgeted_messages = self._trim_messages_for_prompt_budget(messages, input_budget)
+
+        latest_user = ""
+        for msg in reversed(messages):
+            if msg.role == "user":
+                latest_user = msg.content or ""
+                break
+        max_tools = max(1, int(self._config.prompt_budget_max_tools_total))
+        budgeted_tools = self._select_tools_for_prompt_budget(
+            tools,
+            query_text=latest_user,
+            max_tools=max_tools,
+        )
+
+        return budgeted_messages, budgeted_tools
 
     # ------------------------------------------------------------------
     # Tool dispatch (parallel or sequential)
@@ -511,8 +598,7 @@ class Agent:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                messages = self._context.get_messages()
-                tools = self._registry.all_definitions()
+                messages, tools = self._prepare_request_payload()
                 _trace.log_request(messages, tools)
                 raw = self._provider.chat(
                     messages=messages,
