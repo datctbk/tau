@@ -26,6 +26,10 @@ def get_provider(config: TauConfig, agent_config: AgentConfig):
         from tau.providers.mlx_provider import MLXProvider
         return MLXProvider(config, agent_config)
 
+    if name == "unsloth":
+        from tau.providers.unsloth_provider import UnslothProvider
+        return UnslothProvider(config, agent_config)
+
     raise ValueError(
-        f"Unknown provider {name!r}. Available: openai, google, ollama, mlx"
+        f"Unknown provider {name!r}. Available: openai, google, ollama, mlx, unsloth"
     )

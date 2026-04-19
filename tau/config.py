@@ -52,6 +52,11 @@ class OllamaProviderConfig(BaseSettings):
     base_url: str = "http://localhost:11434"
 
 
+class UnslothProviderConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="UNSLOTH_")
+    base_url: str = "http://localhost:8001/v1"
+
+
 class MLXProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MLX_")
     device: str = "gpu"  # gpu|cpu
@@ -258,6 +263,7 @@ class TauConfig(BaseSettings):
     google: GoogleProviderConfig = GoogleProviderConfig()
     ollama: OllamaProviderConfig = OllamaProviderConfig()
     mlx: MLXProviderConfig = MLXProviderConfig()
+    unsloth: UnslothProviderConfig = UnslothProviderConfig()
 
     # tool / skill sub-configs
     shell: ShellToolConfig = ShellToolConfig()
@@ -331,7 +337,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
     init: dict[str, Any] = {}
     defaults = raw.get("defaults", {})
     init.update(defaults)
-    for section in ("openai", "google", "ollama"):
+    for section in ("openai", "google", "ollama", "unsloth"):
         if section in raw.get("providers", {}):
             init[section] = raw["providers"][section]
     if "shell" in raw.get("tools", {}):
