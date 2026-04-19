@@ -51,6 +51,32 @@ _STOP_REASON_MAP: dict[str, StopReason] = {
 }
 
 
+def _estimate_tokens(text: str) -> int:
+    # Fast fallback estimator for local providers that omit token usage.
+    return max(1, len((text or "").strip()) // 4) if (text or "").strip() else 0
+
+
+def _message_text_content(msg: dict[str, Any]) -> str:
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            elif item.get("type") == "image_url":
+                parts.append("[image]")
+        return "\n".join([p for p in parts if p])
+    return str(content or "")
+
+
+def _estimate_prompt_tokens_from_messages(messages: list[dict[str, Any]]) -> int:
+    return sum(_estimate_tokens(_message_text_content(m)) for m in messages if isinstance(m, dict))
+
+
 class UnslothProvider:
     """Provider for Unsloth Studio / llama-server (OpenAI-compatible)."""
 
@@ -97,7 +123,13 @@ class UnslothProvider:
         )
         resp.raise_for_status()
         data = resp.json()
-        return _parse_response(data)
+        parsed = _parse_response(data)
+        if parsed.usage.input_tokens == 0 and parsed.usage.output_tokens == 0:
+            parsed.usage = TokenUsage(
+                input_tokens=_estimate_prompt_tokens_from_messages(payload.get("messages", [])),
+                output_tokens=_estimate_tokens(parsed.content or ""),
+            )
+        return parsed
 
     def _chat_stream(self, payload: dict[str, Any]) -> Generator:
         payload["stream"] = True
@@ -182,6 +214,12 @@ class UnslothProvider:
 
         if tool_calls:
             stop_reason = "tool_use"
+
+        if usage.input_tokens == 0 and usage.output_tokens == 0:
+            usage = TokenUsage(
+                input_tokens=_estimate_prompt_tokens_from_messages(payload.get("messages", [])),
+                output_tokens=_estimate_tokens(full_text),
+            )
 
         yield ProviderResponse(  # type: ignore[misc]
             content=full_text or None,
