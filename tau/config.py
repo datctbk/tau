@@ -50,11 +50,13 @@ class GoogleProviderConfig(BaseSettings):
 class OllamaProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OLLAMA_")
     base_url: str = "http://localhost:11434"
+    timeout_seconds: float = 4*60.0
 
 
 class UnslothProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="UNSLOTH_")
     base_url: str = "http://localhost:8001/v1"
+    timeout_seconds: float = 4*60.0
 
 
 class MLXProviderConfig(BaseSettings):
@@ -237,7 +239,7 @@ class TauConfig(BaseSettings):
 
     provider: str = "openai"
     model: str = "gpt-4o"
-    max_tokens: int = 6144
+    max_tokens: int = 6144 * 8
     max_turns: int = 20
     trim_strategy: str = "sliding_window"
     compaction_enabled: bool = True

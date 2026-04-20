@@ -305,7 +305,7 @@ class Agent:
                     return
 
                 empty_retry_attempts += 1
-                logger.warning(
+                logger.info(
                     "Provider returned empty end_turn response; retrying with nudge "
                     "(%d/%d)",
                     empty_retry_attempts,

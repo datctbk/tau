@@ -36,7 +36,8 @@ class OllamaProvider:
     def __init__(self, config: TauConfig, agent_config: AgentConfig) -> None:
         self._model = agent_config.model
         self._base_url = config.ollama.base_url.rstrip("/")
-        self._client = httpx.Client(timeout=500)
+        timeout_s = max(5.0, float(config.ollama.timeout_seconds))
+        self._client = httpx.Client(timeout=httpx.Timeout(timeout_s))
 
     @property
     def name(self) -> str:

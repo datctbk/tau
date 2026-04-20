@@ -2668,6 +2668,17 @@ def _repl(
         confirm_answered.wait()
         return confirm_result[0]
 
+    def _resolve_confirm(approved: bool) -> None:
+        """Resolve a pending y/N confirmation from any input path."""
+        confirm_result[0] = approved
+        answer_display = "yes ✓" if approved else "no ✗"
+        _append_output(f"  → {answer_display}\n")
+        confirm_pending.clear()
+        confirm_answered.set()
+        # Restart the spinner timer chain — it stopped while waiting for input.
+        if agent_running.is_set():
+            _tick_spinner()
+
     def _run_agent(user_input: str) -> None:
         agent_running.set()
         cancel_requested.clear()
@@ -2705,14 +2716,7 @@ def _repl(
 
         # If we're waiting for a shell confirmation answer, handle it here
         if confirm_pending.is_set():
-            confirm_result[0] = text.lower() in ("y", "yes")
-            answer_display = "yes ✓" if confirm_result[0] else "no ✗"
-            _append_output(f"  → {answer_display}\n")
-            confirm_pending.clear()
-            confirm_answered.set()
-            # Restart the spinner timer chain — it stopped while waiting for input.
-            if agent_running.is_set():
-                _tick_spinner()
+            _resolve_confirm(text.lower() in ("y", "yes"))
             return
 
         if not text:
@@ -2789,10 +2793,25 @@ def _repl(
 
     # -- key bindings --------------------------------------------------------
     kb = KeyBindings()
+    _confirm_mode = Condition(lambda: confirm_pending.is_set())
 
     @kb.add("enter")
     def _enter(event: object) -> None:
         _on_enter(event)
+
+    @kb.add("y", filter=_confirm_mode)
+    @kb.add("Y", filter=_confirm_mode)
+    def _confirm_yes(event: object) -> None:
+        """Approve pending confirmation with a single keypress."""
+        input_buffer.reset()
+        _resolve_confirm(True)
+
+    @kb.add("n", filter=_confirm_mode)
+    @kb.add("N", filter=_confirm_mode)
+    def _confirm_no(event: object) -> None:
+        """Deny pending confirmation with a single keypress."""
+        input_buffer.reset()
+        _resolve_confirm(False)
 
     @kb.add("c-j")
     def _newline(event: object) -> None:
@@ -2874,6 +2893,10 @@ def _repl(
     @kb.add("escape")
     def _escape(event: object) -> None:
         """Escape: cancel the running agent stream."""
+        if confirm_pending.is_set():
+            input_buffer.reset()
+            _resolve_confirm(False)
+            return
         if agent_running.is_set():
             cancel_requested.set()
             if app_ref[0]:
