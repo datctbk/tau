@@ -58,3 +58,15 @@
 {"timestamp": "2026-04-14T15:27:54.134713+00:00", "event_type": "policy.approved", "payload": {"tool": "write_file", "tool_call_id": "c4", "risk": "medium"}}
 {"timestamp": "2026-04-14T15:27:54.135874+00:00", "event_type": "policy.approval_requested", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "needs approval"}}
 {"timestamp": "2026-04-14T15:27:54.135976+00:00", "event_type": "policy.denied", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "Approval denied: needs approval"}}
+{"timestamp": "2026-04-19T15:32:00.117875+00:00", "event_type": "policy.approval_requested", "payload": {"tool": "write_file", "tool_call_id": "c4", "risk": "medium", "reason": "needs approval"}}
+{"timestamp": "2026-04-19T15:32:00.118090+00:00", "event_type": "policy.approved", "payload": {"tool": "write_file", "tool_call_id": "c4", "risk": "medium"}}
+{"timestamp": "2026-04-19T15:32:00.119592+00:00", "event_type": "policy.approval_requested", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "needs approval"}}
+{"timestamp": "2026-04-19T15:32:00.119735+00:00", "event_type": "policy.denied", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "Approval denied: needs approval"}}
+{"timestamp": "2026-04-19T15:33:14.892811+00:00", "event_type": "policy.approval_requested", "payload": {"tool": "write_file", "tool_call_id": "c4", "risk": "medium", "reason": "needs approval"}}
+{"timestamp": "2026-04-19T15:33:14.893016+00:00", "event_type": "policy.approved", "payload": {"tool": "write_file", "tool_call_id": "c4", "risk": "medium"}}
+{"timestamp": "2026-04-19T15:33:14.894331+00:00", "event_type": "policy.approval_requested", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "needs approval"}}
+{"timestamp": "2026-04-19T15:33:14.894447+00:00", "event_type": "policy.denied", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "Approval denied: needs approval"}}
+{"timestamp": "2026-04-19T15:33:26.368232+00:00", "event_type": "policy.approval_requested", "payload": {"tool": "write_file", "tool_call_id": "c4", "risk": "medium", "reason": "needs approval"}}
+{"timestamp": "2026-04-19T15:33:26.368500+00:00", "event_type": "policy.approved", "payload": {"tool": "write_file", "tool_call_id": "c4", "risk": "medium"}}
+{"timestamp": "2026-04-19T15:33:26.369557+00:00", "event_type": "policy.approval_requested", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "needs approval"}}
+{"timestamp": "2026-04-19T15:33:26.369663+00:00", "event_type": "policy.denied", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "Approval denied: needs approval"}}

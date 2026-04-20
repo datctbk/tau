@@ -83,6 +83,9 @@ _OVERFLOW_FAILED_SENTINEL = object()  # compact failed → error already emitted
 # Sentinel returned by _stream() when a steer interrupted the response
 _STEER_SENTINEL = object()
 
+_EMPTY_RESPONSE_NUDGE = "Please continue and provide at least a short textual response."
+_EMPTY_RESPONSE_MAX_RETRIES = 1
+
 
 class MaxTurnsReachedError(Exception):
     pass
@@ -287,6 +290,48 @@ class Agent:
             if response is None:
                 yield ErrorEvent(message="Provider returned no response.")
                 return
+
+            # Some providers occasionally end a turn with no text/tool calls.
+            # Retry with a short nudge, but always under a hard cap.
+            empty_retry_attempts = 0
+            while self._is_empty_end_turn_response(response, had_deltas):
+                if empty_retry_attempts >= _EMPTY_RESPONSE_MAX_RETRIES:
+                    yield ErrorEvent(
+                        message=(
+                            "Provider returned empty end_turn response repeatedly; "
+                            "aborting empty-response retries."
+                        )
+                    )
+                    return
+
+                empty_retry_attempts += 1
+                logger.warning(
+                    "Provider returned empty end_turn response; retrying with nudge "
+                    "(%d/%d)",
+                    empty_retry_attempts,
+                    _EMPTY_RESPONSE_MAX_RETRIES,
+                )
+                raw_retry, retry_error = self._call_with_empty_response_nudge()
+                if retry_error is not None:
+                    yield retry_error
+                    return
+                if raw_retry is None:
+                    yield ErrorEvent(message="Provider returned no response after empty-response retry.")
+                    return
+
+                response, had_deltas, steer_msg = yield from self._stream(raw_retry)
+
+                if steer_msg is not None:
+                    discarded = len(had_deltas) if isinstance(had_deltas, list) else 0
+                    yield SteerEvent(new_input=steer_msg, discarded_tokens=discarded)
+                    self._context.add_message(Message(role="user", content=steer_msg))
+                    self._context.compactor.reset_overflow_flag()
+                    turns = 0
+                    continue
+
+                if response is None:
+                    yield ErrorEvent(message="Provider returned no response after empty-response retry.")
+                    return
 
             # Add completed assistant message to context
             self._context.add_message(Message(
@@ -776,6 +821,27 @@ class Agent:
         if response is not None:
             _trace.log_response(response)
         return response, had_deltas, None
+
+    @staticmethod
+    def _is_empty_end_turn_response(response: ProviderResponse, had_deltas: bool) -> bool:
+        return (
+            response.stop_reason == "end_turn"
+            and not response.tool_calls
+            and not (response.content or "").strip()
+            and not had_deltas
+        )
+
+    def _call_with_empty_response_nudge(self) -> tuple[object | None, ErrorEvent | None]:
+        try:
+            messages, tools = self._prepare_request_payload()
+            retry_messages = list(messages) + [Message(role="user", content=_EMPTY_RESPONSE_NUDGE)]
+            _trace.log_request(retry_messages, tools)
+            raw = self._provider.chat(messages=retry_messages, tools=tools)
+            return raw, None
+        except Exception as exc:  # noqa: BLE001
+            _trace.log_error(str(exc))
+            logger.warning("Empty-response retry failed: %s", exc)
+            return None, ErrorEvent(message=f"Provider empty-response retry failed: {exc}")
 
     def _persist(self) -> None:
         try:

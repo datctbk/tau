@@ -334,6 +334,103 @@ def test_streaming_no_text_chunk_emitted():
     assert not any(isinstance(e, TextChunk) for e in events)
 
 
+def test_empty_end_turn_retries_once_with_nudge():
+    provider = MagicMock()
+    provider.chat.side_effect = [
+        ProviderResponse(content=None, tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+        ProviderResponse(content="Recovered.", tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+    ]
+
+    cfg = _config()
+    session = MagicMock()
+    session.id = "s"
+    session.messages = []
+    session.cumulative_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+    agent = Agent(
+        config=cfg,
+        provider=provider,
+        registry=ToolRegistry(),
+        context=ContextManager(cfg),
+        session=session,
+        session_manager=MagicMock(),
+    )
+
+    events = list(agent.run("hi"))
+    assert any(isinstance(e, TextChunk) and e.text == "Recovered." for e in events)
+    assert provider.chat.call_count == 2
+
+
+def test_empty_end_turn_twice_yields_error():
+    provider = MagicMock()
+    provider.chat.side_effect = [
+        ProviderResponse(content=None, tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+        ProviderResponse(content=None, tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+    ]
+
+    cfg = _config()
+    session = MagicMock()
+    session.id = "s"
+    session.messages = []
+    session.cumulative_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+    agent = Agent(
+        config=cfg,
+        provider=provider,
+        registry=ToolRegistry(),
+        context=ContextManager(cfg),
+        session=session,
+        session_manager=MagicMock(),
+    )
+
+    events = list(agent.run("hi"))
+    errs = [e for e in events if isinstance(e, ErrorEvent)]
+    assert errs
+    assert "aborting empty-response retries" in errs[-1].message
+    assert provider.chat.call_count == 2
+
+
+def test_empty_content_with_tool_calls_does_not_retry():
+    call = ToolCall(id="tc1", name="does_not_exist", arguments={})
+    provider = MagicMock()
+    provider.chat.side_effect = [
+        ProviderResponse(content=None, tool_calls=[call], stop_reason="tool_use", usage=TokenUsage()),
+        ProviderResponse(content="Handled.", tool_calls=[], stop_reason="end_turn", usage=TokenUsage()),
+    ]
+
+    cfg = _config()
+    session = MagicMock()
+    session.id = "s"
+    session.messages = []
+    session.cumulative_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+    agent = Agent(
+        config=cfg,
+        provider=provider,
+        registry=ToolRegistry(),
+        context=ContextManager(cfg),
+        session=session,
+        session_manager=MagicMock(),
+    )
+
+    events = list(agent.run("go"))
+    assert any(isinstance(e, TextChunk) and e.text == "Handled." for e in events)
+    # Exactly 2 calls: initial tool_use + follow-up after tool result. No extra empty-response retry.
+    assert provider.chat.call_count == 2
+
+
 def test_streaming_tool_call_after_stream():
     call = ToolCall(id="s1", name="greet", arguments={"name": "tau"})
     tool = ToolDefinition(
