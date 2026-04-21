@@ -57,6 +57,9 @@ class UnslothProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="UNSLOTH_")
     base_url: str = "http://localhost:8001/v1"
     timeout_seconds: float = 2*60.0
+    # Client-side stream throttling to reduce local UI starvation during generation.
+    stream_yield_every_chunks: int = 0
+    stream_yield_ms: float = 0.0
 
 
 class MLXProviderConfig(BaseSettings):

@@ -24,6 +24,7 @@ import json
 import logging
 import uuid
 import re
+import time
 from collections.abc import Generator
 from typing import Any
 
@@ -85,6 +86,8 @@ class UnslothProvider:
         self._base_url = config.unsloth.base_url.rstrip("/")
         timeout_s = max(5.0, float(config.unsloth.timeout_seconds))
         self._client = httpx.Client(timeout=httpx.Timeout(timeout_s))
+        self._stream_yield_every_chunks = max(0, int(config.unsloth.stream_yield_every_chunks))
+        self._stream_yield_s = max(0.0, float(config.unsloth.stream_yield_ms) / 1000.0)
 
     @property
     def name(self) -> str:
@@ -139,6 +142,7 @@ class UnslothProvider:
         tc_acc: dict[int, dict[str, Any]] = {}
         stop_reason: StopReason = "end_turn"
         usage = TokenUsage()
+        yielded_chunks = 0
 
         with self._client.stream(
             "POST", f"{self._base_url}/chat/completions", json=payload,
@@ -179,7 +183,16 @@ class UnslothProvider:
                 text = delta.get("content")
                 if text:
                     content_parts.append(text)
+                    yielded_chunks += 1
                     yield TextDelta(text=text)  # type: ignore[misc]
+                    if (
+                        self._stream_yield_every_chunks > 0
+                        and self._stream_yield_s > 0.0
+                        and yielded_chunks % self._stream_yield_every_chunks == 0
+                    ):
+                        # Cooperative pause to keep local desktop/UI responsive
+                        # when Unsloth runs on the same machine.
+                        time.sleep(self._stream_yield_s)
 
                 # Tool call deltas
                 if delta.get("tool_calls"):
