@@ -43,3 +43,23 @@ def test_shell_destructive_is_high_risk():
     assert d.risk == "high"
     assert d.allow is True
     assert d.requires_approval is True
+
+
+def test_assistant_workflow_preapproved_skips_duplicate_core_prompt_balanced():
+    p = DefaultToolPolicyHook(profile="balanced")
+    d = p.before_tool_call(
+        agent=None,
+        call=_call("assistant_workflow_run", {"approved_risky_actions": True}),
+    )
+    assert d.allow is True
+    assert d.requires_approval is False
+
+
+def test_assistant_workflow_without_preapproval_still_requires_prompt():
+    p = DefaultToolPolicyHook(profile="balanced")
+    d = p.before_tool_call(
+        agent=None,
+        call=_call("assistant_workflow_run", {"approved_risky_actions": False}),
+    )
+    assert d.allow is True
+    assert d.requires_approval is True

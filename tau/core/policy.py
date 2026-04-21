@@ -76,6 +76,26 @@ class DefaultToolPolicyHook:
         self._profile = profile
         self._evaluator = _load_external_evaluator()
 
+    @staticmethod
+    def _is_preapproved_by_assistant(call: ToolCall) -> bool:
+        """Avoid duplicate approval prompts when assistant already gated risk.
+
+        tau-assistant's workflow gate uses the explicit ``approved_risky_actions``
+        parameter. If it is true, core policy should not prompt again for the same
+        user decision.
+        """
+        if call.name != "assistant_workflow_run":
+            return False
+        return bool(call.arguments.get("approved_risky_actions", False))
+
     def before_tool_call(self, *, agent: "Agent", call: ToolCall) -> PolicyDecision:
         _ = agent
-        return self._evaluator.decide(profile=self._profile, call=call)
+        decision = self._evaluator.decide(profile=self._profile, call=call)
+        if decision.requires_approval and self._is_preapproved_by_assistant(call):
+            return PolicyDecision(
+                allow=decision.allow,
+                requires_approval=False,
+                risk=decision.risk,
+                reason="Approval already confirmed by assistant workflow gate.",
+            )
+        return decision
