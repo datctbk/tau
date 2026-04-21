@@ -11,6 +11,55 @@ from tau.core.types import ToolDefinition, ToolParameter
 
 logger = logging.getLogger(__name__)
 
+
+def _compact_python_tracebacks(text: str) -> str:
+    """Collapse Python tracebacks to a short, user-facing summary.
+
+    Keeps non-traceback output intact and replaces each traceback block with
+    the exception line plus a short hint.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() != "Traceback (most recent call last):":
+            out.append(line)
+            i += 1
+            continue
+
+        # Consume traceback block lines until we hit the exception summary,
+        # usually "ValueError: ..." (or another *Error/*Exception type).
+        exc_line = ""
+        j = i + 1
+        while j < len(lines):
+            cur = lines[j].rstrip()
+            stripped = cur.strip()
+            if stripped and ("Error:" in stripped or stripped.endswith("Exception")):
+                exc_line = stripped
+                j += 1
+                break
+            j += 1
+
+        if not exc_line:
+            # Fallback to the last non-empty traceback line we scanned.
+            for k in range(min(j, len(lines)) - 1, i, -1):
+                if lines[k].strip():
+                    exc_line = lines[k].strip()
+                    break
+
+        if exc_line:
+            out.append(f"Python exception: {exc_line}")
+        else:
+            out.append("Python exception occurred.")
+        out.append("(traceback hidden; rerun manually for full details)")
+        i = max(j, i + 1)
+
+    return "\n".join(out).rstrip()
+
 # Module-level config (set by CLI at startup from TauConfig)
 _shell_config: dict[str, Any] = {
     "require_confirmation": True,
@@ -93,7 +142,7 @@ class PersistentShell:
         # Remove any leading "bash-X.X$ " prompt if it leaked
         import re
         res = re.sub(r'^bash-[0-9.]+[$#] ', '', res)
-        return res.strip()
+        return _compact_python_tracebacks(res.strip())
 
     def _execute(self, command: str) -> None:
         """Internal low-level execute without exit-code wrapping."""
@@ -183,9 +232,10 @@ def run_bash(command: str, workdir: str = "") -> str:
 
     parts: list[str] = []
     if result.stdout:
-        parts.append(result.stdout.rstrip())
+        parts.append(_compact_python_tracebacks(result.stdout.rstrip()))
     if result.stderr:
-        parts.append(f"[stderr]\n{result.stderr.rstrip()}")
+        compact_stderr = _compact_python_tracebacks(result.stderr.rstrip())
+        parts.append(f"[stderr]\n{compact_stderr}")
     parts.append(f"[exit {result.returncode}]")
     return "\n".join(parts)
 
