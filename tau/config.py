@@ -50,13 +50,13 @@ class GoogleProviderConfig(BaseSettings):
 class OllamaProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OLLAMA_")
     base_url: str = "http://localhost:11434"
-    timeout_seconds: float = 4*60.0
+    timeout_seconds: float = 2*60.0
 
 
 class UnslothProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="UNSLOTH_")
     base_url: str = "http://localhost:8001/v1"
-    timeout_seconds: float = 4*60.0
+    timeout_seconds: float = 2*60.0
 
 
 class MLXProviderConfig(BaseSettings):
