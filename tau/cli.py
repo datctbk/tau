@@ -440,6 +440,7 @@ def _render_events(
 
     def _flush_stream(end_line: bool = True) -> None:
         nonlocal is_streaming, _in_thinking
+        closed_thinking = False
         if _in_thinking:
             # Close thinking styling
             if output_fn:
@@ -448,10 +449,13 @@ def _render_events(
                 sys.stdout.write("\033[0m")
                 sys.stdout.flush()
             _in_thinking = False
+            closed_thinking = True
+            if end_line:
+                _writeln()
         if not is_streaming:
             return
         is_streaming = False
-        if end_line:
+        if end_line and not closed_thinking:
             _writeln()
         stream_buffer.clear()
 
