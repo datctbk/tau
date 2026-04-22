@@ -78,6 +78,68 @@ def _estimate_prompt_tokens_from_messages(messages: list[dict[str, Any]]) -> int
     return sum(_estimate_tokens(_message_text_content(m)) for m in messages if isinstance(m, dict))
 
 
+_THINK_START_TAGS = ("<think>", "<|think|>")
+_THINK_END_TAG = "</think>"
+
+
+def _split_stream_text_for_thinking(
+    text: str,
+    *,
+    in_thinking: bool,
+) -> tuple[str, str, bool, str]:
+    """Split streamed text into visible/thinking fragments with carry support.
+
+    Returns:
+      (visible_text, thinking_text, new_in_thinking, carry_tail)
+    """
+    visible_parts: list[str] = []
+    think_parts: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if in_thinking:
+            end_idx = text.find(_THINK_END_TAG, i)
+            if end_idx == -1:
+                remain = text[i:]
+                carry = ""
+                if _THINK_END_TAG.startswith(remain):
+                    carry = remain
+                    remain = ""
+                if remain:
+                    think_parts.append(remain)
+                return "".join(visible_parts), "".join(think_parts), True, carry
+            think_parts.append(text[i:end_idx])
+            i = end_idx + len(_THINK_END_TAG)
+            in_thinking = False
+            continue
+
+        starts = [(text.find(tag, i), tag) for tag in _THINK_START_TAGS]
+        starts = [(idx, tag) for idx, tag in starts if idx != -1]
+        if not starts:
+            remain = text[i:]
+            carry = ""
+            for tag in _THINK_START_TAGS:
+                max_len = min(len(tag) - 1, len(remain))
+                for k in range(max_len, 0, -1):
+                    if tag.startswith(remain[-k:]):
+                        carry = remain[-k:]
+                        remain = remain[:-k]
+                        break
+                if carry:
+                    break
+            if remain:
+                visible_parts.append(remain)
+            return "".join(visible_parts), "".join(think_parts), False, carry
+
+        next_idx, next_tag = min(starts, key=lambda x: x[0])
+        if next_idx > i:
+            visible_parts.append(text[i:next_idx])
+        i = next_idx + len(next_tag)
+        in_thinking = True
+
+    return "".join(visible_parts), "".join(think_parts), in_thinking, ""
+
+
 class UnslothProvider:
     """Provider for Unsloth Studio / llama-server (OpenAI-compatible)."""
 
@@ -143,6 +205,8 @@ class UnslothProvider:
         stop_reason: StopReason = "end_turn"
         usage = TokenUsage()
         yielded_chunks = 0
+        in_thinking = False
+        think_carry = ""
 
         with self._client.stream(
             "POST", f"{self._base_url}/chat/completions", json=payload,
@@ -179,12 +243,26 @@ class UnslothProvider:
 
                 delta = choice.get("delta", {})
 
+                # Native reasoning stream fields from OpenAI-compatible servers.
+                reasoning = delta.get("reasoning_content") or delta.get("thinking") or delta.get("reasoning")
+                if isinstance(reasoning, str) and reasoning:
+                    yield TextDelta(text=reasoning, is_thinking=True)  # type: ignore[misc]
+
                 # Text delta
                 text = delta.get("content")
                 if text:
-                    content_parts.append(text)
-                    yielded_chunks += 1
-                    yield TextDelta(text=text)  # type: ignore[misc]
+                    parsed_text = think_carry + text
+                    think_carry = ""
+                    visible, think, in_thinking, think_carry = _split_stream_text_for_thinking(
+                        parsed_text,
+                        in_thinking=in_thinking,
+                    )
+                    if think:
+                        yield TextDelta(text=think, is_thinking=True)  # type: ignore[misc]
+                    if visible:
+                        content_parts.append(visible)
+                        yielded_chunks += 1
+                        yield TextDelta(text=visible)  # type: ignore[misc]
                     if (
                         self._stream_yield_every_chunks > 0
                         and self._stream_yield_s > 0.0
@@ -219,6 +297,8 @@ class UnslothProvider:
 
         # Fallback: parse <tool_call> blocks from text when native tool_calls
         # are not returned (some local models emit XML in plain text).
+        if think_carry and not in_thinking:
+            content_parts.append(think_carry)
         full_text = "".join(content_parts)
         if not tool_calls and full_text:
             tool_calls = _parse_tool_calls(full_text)
