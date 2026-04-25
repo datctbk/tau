@@ -13,6 +13,7 @@ from tau.core.types import (
     AgentConfig,
     ErrorEvent,
     Message,
+    ParallelToolsEvent,
     ProviderResponse,
     TextChunk,
     TextDelta,
@@ -552,6 +553,7 @@ def test_parallel_tools_all_results_present():
         config=cfg,
     )
     events = list(agent.run("run all"))
+    assert any(isinstance(e, ParallelToolsEvent) for e in events)
     results = [e for e in events if isinstance(e, ToolResultEvent)]
     assert len(results) == 4
     assert {e.result.content for e in results} == {"result-0", "result-1", "result-2", "result-3"}

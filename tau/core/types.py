@@ -291,6 +291,15 @@ class ToolResultEvent:
 
 
 @dataclass
+class ParallelToolsEvent:
+    tool_calls: int
+    workers: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "parallel_tools", "tool_calls": self.tool_calls, "workers": self.workers}
+
+
+@dataclass
 class TurnComplete:
     usage: TokenUsage
 
@@ -402,6 +411,7 @@ Event = Union[
     TextDelta,
     ToolCallEvent,
     ToolResultEvent,
+    ParallelToolsEvent,
     TurnComplete,
     ErrorEvent,
     CompactionEvent,

@@ -30,6 +30,7 @@ from tau.core.types import (
     CompactionEvent,
     CostLimitExceeded,
     PolicyDecisionEvent,
+    ParallelToolsEvent,
     ErrorEvent,
     ExtensionLoadError,
     RetryEvent,
@@ -680,6 +681,10 @@ def _render_events(
                     padding=(0, 1),
                 ))
             _start_spinner("thinking...")
+        elif isinstance(event, ParallelToolsEvent):
+            _stop_spinner()
+            _flush_stream(end_line=True)
+            _writeln(f"  ∥ parallel tools: {event.tool_calls} calls / {event.workers} workers")
         elif isinstance(event, TurnComplete):
             _stop_spinner()
             _flush_stream(end_line=True)
@@ -2407,6 +2412,7 @@ def _repl(
         )
 
     import threading
+    import traceback
     from prompt_toolkit import Application
     from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.completion import Completer, Completion
@@ -2533,6 +2539,37 @@ def _repl(
             output_text_parts.append(text)
         if app_ref[0]:
             app_ref[0].invalidate()
+
+    # Capture uncaught exceptions into the TUI output pane instead of letting
+    # Python print raw tracebacks to stderr, which can corrupt full-screen UI.
+    _prev_sys_excepthook = sys.excepthook
+    _prev_thread_excepthook = getattr(threading, "excepthook", None)
+
+    def _render_uncaught_exception(exc_type: type[BaseException], exc_value: BaseException, exc_tb: Any) -> None:
+        if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+            return
+        try:
+            lines = traceback.format_exception(exc_type, exc_value, exc_tb)
+            trace_text = "".join(lines[-18:]).strip()
+            _append_output(
+                "\n\033[31m✗ Unhandled exception\033[0m\n"
+                + ("\033[2m" + trace_text + "\033[0m\n" if trace_text else f"{exc_type.__name__}: {exc_value}\n")
+            )
+            if app_ref[0]:
+                app_ref[0].invalidate()
+        except Exception:  # noqa: BLE001
+            # Last-resort fallback to previous hook behavior.
+            _prev_sys_excepthook(exc_type, exc_value, exc_tb)
+
+    def _sys_excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_tb: Any) -> None:
+        _render_uncaught_exception(exc_type, exc_value, exc_tb)
+
+    def _thread_excepthook(args: Any) -> None:
+        _render_uncaught_exception(args.exc_type, args.exc_value, args.exc_traceback)
+
+    sys.excepthook = _sys_excepthook
+    if _prev_thread_excepthook is not None:
+        threading.excepthook = _thread_excepthook
 
     def _tui_ext_print(content: Any, **kwargs: Any) -> None:
         """Render extension output into the REPL output buffer.
@@ -2969,6 +3006,10 @@ def _repl(
         application.run()
     finally:
         _theme_watcher.stop()
+        # Restore global exception hooks after TUI exits.
+        sys.excepthook = _prev_sys_excepthook
+        if _prev_thread_excepthook is not None:
+            threading.excepthook = _prev_thread_excepthook
 
 
 def _tau_version() -> str:

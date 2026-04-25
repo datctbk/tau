@@ -24,6 +24,7 @@ from tau.core.types import (
     TextDelta,
     ToolCall,
     ToolCallEvent,
+    ParallelToolsEvent,
     ToolResultEvent,
     TurnComplete,
     BeforeToolCallContext,
@@ -561,6 +562,11 @@ class Agent:
                 dispatched: dict[int, ToolResult] = {
                     runnable_idx[j]: result for j, (_, result) in enumerate(pairs)
                 }
+                if len(runnable_calls) > 1:
+                    yield ParallelToolsEvent(
+                        tool_calls=len(runnable_calls),
+                        workers=min(self._config.parallel_tools_max_workers, len(runnable_calls)),
+                    )
             else:
                 dispatched = {}
 
