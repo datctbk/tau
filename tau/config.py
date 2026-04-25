@@ -57,6 +57,9 @@ class UnslothProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="UNSLOTH_")
     base_url: str = "http://localhost:8001/v1"
     timeout_seconds: float = 2*60.0
+    # Streaming read timeout in seconds. <= 0 disables read timeout
+    # so long prefill phases can complete before first token.
+    stream_read_timeout_seconds: float = 0.0
     # Client-side stream throttling to reduce local UI starvation during generation.
     stream_yield_every_chunks: int = 0
     stream_yield_ms: float = 0.0
@@ -242,7 +245,7 @@ class TauConfig(BaseSettings):
 
     provider: str = "openai"
     model: str = "gpt-4o"
-    max_tokens: int = 6144 * 10
+    max_tokens: int = 6144 * 12
     max_turns: int = 20
     trim_strategy: str = "sliding_window"
     compaction_enabled: bool = True

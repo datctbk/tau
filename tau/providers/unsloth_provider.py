@@ -147,7 +147,23 @@ class UnslothProvider:
         self._model = agent_config.model
         self._base_url = config.unsloth.base_url.rstrip("/")
         timeout_s = max(5.0, float(config.unsloth.timeout_seconds))
-        self._client = httpx.Client(timeout=httpx.Timeout(timeout_s))
+        stream_read_timeout_s = float(config.unsloth.stream_read_timeout_seconds)
+
+        # Default request timeout for non-streaming calls.
+        self._request_timeout = httpx.Timeout(timeout_s)
+
+        # Streaming should tolerate long prefill before first token.
+        # Keep connect/write/pool bounded while allowing read timeout
+        # to be disabled (default) for local llama-server workloads.
+        stream_read_timeout = None if stream_read_timeout_s <= 0 else max(1.0, stream_read_timeout_s)
+        self._stream_timeout = httpx.Timeout(
+            connect=timeout_s,
+            read=stream_read_timeout,
+            write=timeout_s,
+            pool=timeout_s,
+        )
+
+        self._client = httpx.Client(timeout=self._request_timeout)
         self._stream_yield_every_chunks = max(0, int(config.unsloth.stream_yield_every_chunks))
         self._stream_yield_s = max(0.0, float(config.unsloth.stream_yield_ms) / 1000.0)
 
@@ -208,83 +224,93 @@ class UnslothProvider:
         in_thinking = False
         think_carry = ""
 
-        with self._client.stream(
-            "POST", f"{self._base_url}/chat/completions", json=payload,
-        ) as resp:
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                if not line or not line.startswith("data: "):
-                    continue
-                data_str = line[6:].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
+        try:
+            with self._client.stream(
+                "POST",
+                f"{self._base_url}/chat/completions",
+                json=payload,
+                timeout=self._stream_timeout,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
 
-                # Usage (if provided)
-                if "usage" in chunk and chunk["usage"]:
-                    u = chunk["usage"]
-                    usage = TokenUsage(
-                        input_tokens=u.get("prompt_tokens", 0),
-                        output_tokens=u.get("completion_tokens", 0),
-                    )
+                    # Usage (if provided)
+                    if "usage" in chunk and chunk["usage"]:
+                        u = chunk["usage"]
+                        usage = TokenUsage(
+                            input_tokens=u.get("prompt_tokens", 0),
+                            output_tokens=u.get("completion_tokens", 0),
+                        )
 
-                if not chunk.get("choices"):
-                    continue
+                    if not chunk.get("choices"):
+                        continue
 
-                choice = chunk["choices"][0]
+                    choice = chunk["choices"][0]
 
-                if choice.get("finish_reason"):
-                    stop_reason = _STOP_REASON_MAP.get(
-                        choice["finish_reason"], "end_turn",
-                    )
+                    if choice.get("finish_reason"):
+                        stop_reason = _STOP_REASON_MAP.get(
+                            choice["finish_reason"], "end_turn",
+                        )
 
-                delta = choice.get("delta", {})
+                    delta = choice.get("delta", {})
 
-                # Native reasoning stream fields from OpenAI-compatible servers.
-                reasoning = delta.get("reasoning_content") or delta.get("thinking") or delta.get("reasoning")
-                if isinstance(reasoning, str) and reasoning:
-                    yield TextDelta(text=reasoning, is_thinking=True)  # type: ignore[misc]
+                    # Native reasoning stream fields from OpenAI-compatible servers.
+                    reasoning = delta.get("reasoning_content") or delta.get("thinking") or delta.get("reasoning")
+                    if isinstance(reasoning, str) and reasoning:
+                        yield TextDelta(text=reasoning, is_thinking=True)  # type: ignore[misc]
 
-                # Text delta
-                text = delta.get("content")
-                if text:
-                    parsed_text = think_carry + text
-                    think_carry = ""
-                    visible, think, in_thinking, think_carry = _split_stream_text_for_thinking(
-                        parsed_text,
-                        in_thinking=in_thinking,
-                    )
-                    if think:
-                        yield TextDelta(text=think, is_thinking=True)  # type: ignore[misc]
-                    if visible:
-                        content_parts.append(visible)
-                        yielded_chunks += 1
-                        yield TextDelta(text=visible)  # type: ignore[misc]
-                    if (
-                        self._stream_yield_every_chunks > 0
-                        and self._stream_yield_s > 0.0
-                        and yielded_chunks % self._stream_yield_every_chunks == 0
-                    ):
-                        # Cooperative pause to keep local desktop/UI responsive
-                        # when Unsloth runs on the same machine.
-                        time.sleep(self._stream_yield_s)
+                    # Text delta
+                    text = delta.get("content")
+                    if text:
+                        parsed_text = think_carry + text
+                        think_carry = ""
+                        visible, think, in_thinking, think_carry = _split_stream_text_for_thinking(
+                            parsed_text,
+                            in_thinking=in_thinking,
+                        )
+                        if think:
+                            yield TextDelta(text=think, is_thinking=True)  # type: ignore[misc]
+                        if visible:
+                            content_parts.append(visible)
+                            yielded_chunks += 1
+                            yield TextDelta(text=visible)  # type: ignore[misc]
+                        if (
+                            self._stream_yield_every_chunks > 0
+                            and self._stream_yield_s > 0.0
+                            and yielded_chunks % self._stream_yield_every_chunks == 0
+                        ):
+                            # Cooperative pause to keep local desktop/UI responsive
+                            # when Unsloth runs on the same machine.
+                            time.sleep(self._stream_yield_s)
 
-                # Tool call deltas
-                if delta.get("tool_calls"):
-                    for tc_delta in delta["tool_calls"]:
-                        idx = tc_delta.get("index", 0)
-                        if idx not in tc_acc:
-                            tc_acc[idx] = {"id": "", "name": "", "arguments": ""}
-                        if tc_delta.get("id"):
-                            tc_acc[idx]["id"] = tc_delta["id"]
-                        fn = tc_delta.get("function", {})
-                        if fn.get("name"):
-                            tc_acc[idx]["name"] += fn["name"]
-                        if fn.get("arguments"):
-                            tc_acc[idx]["arguments"] += fn["arguments"]
+                    # Tool call deltas
+                    if delta.get("tool_calls"):
+                        for tc_delta in delta["tool_calls"]:
+                            idx = tc_delta.get("index", 0)
+                            if idx not in tc_acc:
+                                tc_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                            if tc_delta.get("id"):
+                                tc_acc[idx]["id"] = tc_delta["id"]
+                            fn = tc_delta.get("function", {})
+                            if fn.get("name"):
+                                tc_acc[idx]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                tc_acc[idx]["arguments"] += fn["arguments"]
+        except httpx.ReadTimeout as exc:
+            raise RuntimeError(
+                "Unsloth stream read timed out before completion. "
+                "For long prefill prompts, set UNSLOTH_STREAM_READ_TIMEOUT_SECONDS=0 "
+                "(disable read timeout) or increase it in config."
+            ) from exc
 
         tool_calls = [
             ToolCall(

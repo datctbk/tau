@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import importlib
 import logging
 import os
 import re
+import sys
+import sysconfig
 import threading
 import time
 import uuid
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 
 # Suppress the harmless macOS malloc stack logging noise emitted by Metal/MLX.
@@ -38,9 +42,22 @@ _inference_lock = threading.Lock()
 
 
 def _is_vlm_model(model_name: str) -> bool:
-    """Return True for models that require mlx-vlm (e.g. Gemma 4)."""
+    """Return True only for known vision-language models.
+
+    Text-only checkpoints (including most Qwen 3.x variants) should go
+    through mlx-lm. Routing them through mlx-vlm can trigger stream/context
+    issues and unnecessary multimodal code paths.
+    """
     lower = model_name.lower()
-    return "gemma4" in lower or "gemma-4" in lower
+    return (
+        "gemma4" in lower
+        or "gemma-4" in lower
+        or "qwen-vl" in lower
+        or "qwen2.5-vl" in lower
+        or "qwen2-vl" in lower
+        or "vision" in lower
+        or "multimodal" in lower
+    )
 
 
 class MLXProvider:
@@ -67,21 +84,104 @@ class MLXProvider:
         # Configure MLX device early so model loading/inference uses it.
         self._configure_mlx_device()
 
+        # Both mlx-vlm and mlx-lm rely on transformers runtime imports.
+        self._validate_transformers_runtime()
+
         if self._use_vlm:
             try:
                 import mlx_vlm  # noqa: F401
             except ImportError as exc:
-                raise ImportError(
-                    "mlx-vlm package is required for this model: pip install mlx-vlm"
-                ) from exc
+                raise ImportError(self._format_mlx_import_error(exc, backend="mlx-vlm")) from exc
         else:
             try:
                 import mlx_lm  # noqa: F401
             except ImportError as exc:
-                raise ImportError(
-                    "mlx-lm package is required: pip install mlx-lm"
-                ) from exc
+                raise ImportError(self._format_mlx_import_error(exc, backend="mlx-lm")) from exc
         self._model, self._tokenizer = self._load_model()
+
+    @staticmethod
+    def _ensure_stdlib_profile_module() -> None:
+        """Ensure sys.modules['profile'] points to the stdlib module.
+
+        Some extensions add their package root to sys.path, which can shadow
+        stdlib `profile` with an unrelated local module. Transformers imports
+        cProfile, and cProfile expects stdlib profile.run/runctx to exist.
+        """
+        stdlib_dir_raw = sysconfig.get_paths().get("stdlib")
+        if not stdlib_dir_raw:
+            raise ImportError("Could not resolve stdlib path for profile module")
+
+        stdlib_dir = Path(stdlib_dir_raw).resolve()
+        stdlib_profile_path = (stdlib_dir / "profile.py").resolve()
+
+        profile_mod = importlib.import_module("profile")
+        profile_origin = getattr(profile_mod, "__file__", None)
+        is_stdlib_origin = False
+        if profile_origin:
+            try:
+                origin_path = Path(profile_origin).resolve()
+                is_stdlib_origin = origin_path == stdlib_profile_path
+            except Exception:
+                is_stdlib_origin = False
+
+        if hasattr(profile_mod, "run") and hasattr(profile_mod, "runctx") and is_stdlib_origin:
+            return
+
+        spec = importlib.util.spec_from_file_location("profile", stdlib_profile_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Failed to load stdlib profile from {stdlib_profile_path}")
+
+        stdlib_profile_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(stdlib_profile_mod)  # type: ignore[attr-defined]
+
+        if not hasattr(stdlib_profile_mod, "run") or not hasattr(stdlib_profile_mod, "runctx"):
+            raise ImportError(
+                f"Loaded profile module from {stdlib_profile_path} is missing run/runctx"
+            )
+
+        sys.modules["profile"] = stdlib_profile_mod
+
+    @staticmethod
+    def _validate_transformers_runtime() -> None:
+        """Validate critical transformers imports required by mlx-lm."""
+        try:
+            MLXProvider._ensure_stdlib_profile_module()
+
+            from transformers import AutoTokenizer  # noqa: F401
+            from transformers.generation import GenerationMixin  # noqa: F401
+        except Exception as exc:
+            raise ImportError(
+                "transformers runtime import failed (AutoTokenizer/GenerationMixin). "
+                "Reinstall in the active venv: "
+                "pip install --upgrade --force-reinstall --no-cache-dir "
+                "transformers tokenizers sentencepiece safetensors"
+            ) from exc
+
+    @staticmethod
+    def _format_mlx_import_error(exc: ImportError, backend: str) -> str:
+        """Format nested MLX import failures with actionable hints.
+
+        mlx-vlm imports mlx-lm utilities, and both import transformers lazily.
+        If a transitive dependency is broken/missing, the raw message often
+        mentions AutoTokenizer and hides the true cause behind a generic module
+        import failure.
+        """
+        base = f"{backend} import failed. Install/repair MLX dependencies: pip install -U {backend}"
+        details = str(exc).strip()
+        lower = details.lower()
+
+        if "autotokenizer" in lower or "generationmixin" in lower or "transformers" in lower:
+            return (
+                f"{base}. transformers/tokenizers may be missing or incompatible. "
+                "Try: pip install --upgrade --force-reinstall --no-cache-dir "
+                "transformers tokenizers sentencepiece safetensors. "
+                f"Original error: {details}"
+            )
+
+        if details:
+            return f"{base}. Original error: {details}"
+
+        return base
 
     def _configure_mlx_device(self) -> None:
         try:
