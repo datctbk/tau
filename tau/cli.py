@@ -235,6 +235,15 @@ _AGENT_OPTIONS = [
     click.option("--topk", type=int, default=0, show_default=True, help="Top-k relevant memory entries to inject per turn (0 disables)."),
     click.option("--minimal", is_flag=True, default=False, help="Run with minimal core profile (disable optional capabilities/extensions)."),
     click.option(
+        "--dynamic-prompt-builder/--no-dynamic-prompt-builder",
+        "dynamic_prompt_builder",
+        default=None,
+        help=(
+            "Enable dynamic system prompt fragment budgeting/prioritization. "
+            "Default follows config and is off unless enabled."
+        ),
+    ),
+    click.option(
         "--prompt-budget/--no-prompt-budget",
         "prompt_budget",
         default=None,
@@ -289,6 +298,7 @@ def _make_agent_config(
     persistent_shell: bool = False,
     max_cost: float | None = None,
     topk: int = 0,
+    dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     minimal: bool = False,
 ) -> AgentConfig:
@@ -303,6 +313,7 @@ def _make_agent_config(
         persistent_shell=persistent_shell,
         max_cost=max_cost,
         topk=topk,
+        dynamic_prompt_builder=dynamic_prompt_builder,
         prompt_budget=prompt_budget,
         minimal=minimal,
     )
@@ -2999,6 +3010,7 @@ def run_cmd(
     tools_filter: str | None = None,
     topk: int = 0,
     minimal: bool = False,
+    dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     prompt: str | None = None,
 ) -> None:
@@ -3070,6 +3082,7 @@ def run_cmd(
         persistent_shell=persistent_shell,
         max_cost=max_cost,
         topk=topk,
+        dynamic_prompt_builder=dynamic_prompt_builder,
         minimal=minimal,
         prompt_budget=prompt_budget,
     )
@@ -3243,6 +3256,7 @@ def sessions_fork(
     max_cost: float | None, no_session: bool,
     topk: int = 0,
     minimal: bool = False,
+    dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
 ) -> None:
     from tau.core.session import local_sessions_dir
@@ -3275,6 +3289,7 @@ def sessions_fork(
             no_parallel=no_parallel,
             max_cost=max_cost,
             topk=topk,
+            dynamic_prompt_builder=dynamic_prompt_builder,
             minimal=minimal,
             prompt_budget=prompt_budget,
         )
@@ -3352,6 +3367,7 @@ def sessions_import(
     trace_log: str | None,
     topk: int = 0,
     minimal: bool = False,
+    dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
 ) -> None:
     """Import a previously-exported JSON session file."""
@@ -3397,6 +3413,7 @@ def sessions_import(
             persistent_shell=persistent_shell,
             max_cost=max_cost,
             topk=topk,
+            dynamic_prompt_builder=dynamic_prompt_builder,
             minimal=minimal,
             prompt_budget=prompt_budget,
         )

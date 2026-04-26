@@ -50,6 +50,7 @@ def make_agent_config(
     persistent_shell: bool = False,
     max_cost: float | None = None,
     topk: int = 0,
+    dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     minimal: bool = False,
 ) -> AgentConfig:
@@ -61,6 +62,8 @@ def make_agent_config(
         tau_config.shell.use_persistent_shell = True
     if prompt_budget is not None:
         tau_config.prompt_budget_enabled = bool(prompt_budget)
+    if dynamic_prompt_builder is not None:
+        tau_config.dynamic_prompt_builder_enabled = bool(dynamic_prompt_builder)
     if minimal:
         apply_minimal_profile(tau_config)
     return AgentConfig(
