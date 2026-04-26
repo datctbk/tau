@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from tau.core.extension import ExtensionRegistry
     from tau.core.session import Session, SessionManager
     from tau.core.steering import SteeringChannel
-    from tau.core.tool_registry import ToolRegistry
+    from tau.core.tool_runtime import ToolRuntime
     from tau.providers.base import BaseProvider
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class Agent:
         self,
         config: AgentConfig,
         provider: "BaseProvider",
-        registry: "ToolRegistry",
+        registry: "ToolRuntime",
         context: "ContextManager",
         session: "Session",
         session_manager: "SessionManager",

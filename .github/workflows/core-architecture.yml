@@ -1,0 +1,32 @@
+name: tau-core-architecture
+
+on:
+  pull_request:
+    paths:
+      - "tau/**"
+      - "tests/**"
+      - ".github/workflows/core-architecture.yml"
+  push:
+    branches: [ main ]
+    paths:
+      - "tau/**"
+      - "tests/**"
+
+jobs:
+  architecture-boundary:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tau
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pytest
+      - name: Enforce core architecture boundaries
+        run: pytest -q tests/test_architecture_boundaries.py
+

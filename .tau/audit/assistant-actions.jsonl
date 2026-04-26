@@ -74,3 +74,7 @@
 {"timestamp": "2026-04-26T06:28:08.493699+00:00", "event_type": "policy.approved", "payload": {"tool": "write_file", "tool_call_id": "c4", "risk": "medium"}}
 {"timestamp": "2026-04-26T06:28:08.495188+00:00", "event_type": "policy.approval_requested", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "needs approval"}}
 {"timestamp": "2026-04-26T06:28:08.495299+00:00", "event_type": "policy.denied", "payload": {"tool": "write_file", "tool_call_id": "c5", "risk": "medium", "reason": "Approval denied: needs approval"}}
+{"timestamp": "2026-04-26T11:44:51.596540+00:00", "event_type": "tool.completed", "payload": {"tool": "echo", "tool_call_id": "c1", "is_error": false}}
+{"timestamp": "2026-04-26T11:45:38.921672+00:00", "event_type": "tool.completed", "payload": {"tool": "echo", "tool_call_id": "c1", "is_error": false}}
+{"timestamp": "2026-04-26T11:45:49.208301+00:00", "event_type": "tool.completed", "payload": {"tool": "echo", "tool_call_id": "c1", "is_error": false}}
+{"timestamp": "2026-04-26T11:46:12.124130+00:00", "event_type": "tool.completed", "payload": {"tool": "echo", "tool_call_id": "c1", "is_error": false}}

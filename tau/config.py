@@ -315,6 +315,7 @@ class TauConfig(BaseSettings):
     smart_routing: SmartRoutingConfig = SmartRoutingConfig()
     capabilities: CapabilitiesConfig = CapabilitiesConfig()
     credential_pool_enabled: bool = False
+    minimal_mode: bool = False
 
     @field_validator("trim_strategy")
     @classmethod

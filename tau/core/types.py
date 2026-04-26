@@ -217,6 +217,8 @@ class AgentConfig:
     smart_routing_config: dict | None = None  # None = disabled
     # --- optional infrastructure capabilities ---
     capabilities: dict[str, bool] | None = None
+    # --- minimal runtime profile ---
+    minimal_mode: bool = False
 
 # ---------------------------------------------------------------------------
 # Compaction

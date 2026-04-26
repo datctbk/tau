@@ -22,6 +22,8 @@ FORBIDDEN_REPO_PATH_LITERALS = (
     "tau-gateway",
 )
 
+MAX_CORE_FILE_LINES = 1000
+
 
 def _iter_core_py_files() -> list[Path]:
     return sorted(
@@ -63,3 +65,17 @@ def test_core_does_not_probe_extension_repo_paths_directly() -> None:
         + "\n".join(violations)
     )
 
+
+def test_core_module_size_guardrail() -> None:
+    violations: list[str] = []
+    for file_path in _iter_core_py_files():
+        line_count = len(file_path.read_text(encoding="utf-8").splitlines())
+        if line_count > MAX_CORE_FILE_LINES:
+            violations.append(
+                f"{file_path}: {line_count} lines (limit: {MAX_CORE_FILE_LINES})"
+            )
+
+    assert not violations, (
+        "Core module size guardrail exceeded:\n"
+        + "\n".join(violations)
+    )

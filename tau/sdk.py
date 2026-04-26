@@ -14,6 +14,7 @@ from tau.config import TauConfig, ensure_tau_home, load_config
 from tau.core.agent import Agent
 from tau.core.context import ContextManager, configure_context
 from tau.core.extension import ExtensionRegistry
+from tau.core.prompt_layers import PromptLayer, apply_prompt_layers
 from tau.core.session import Session, SessionManager
 from tau.core.steering import SteeringChannel
 from tau.core.tool_registry import ToolRegistry
@@ -336,18 +337,15 @@ def create_session(
     # Context
     context = ContextManager(config)
 
-    if load_context_files:
-        from tau.context_files import load_system_prompt_override, load_context_files as _load_ctx
-        sys_override = load_system_prompt_override(workspace)
-        if sys_override is not None:
-            config.system_prompt = sys_override
-            for m in context._messages:
-                if m.role == "system":
-                    m.content = sys_override
-                    break
-        ctx_text = _load_ctx(workspace)
-        if ctx_text:
-            context.inject_prompt_fragment(ctx_text)
+    # System prompt override (align with CLI bootstrap behavior)
+    from tau.context_files import load_system_prompt_override
+    sys_override = load_system_prompt_override(workspace)
+    if sys_override is not None:
+        config.system_prompt = sys_override
+        for m in context._messages:
+            if m.role == "system":
+                m.content = sys_override
+                break
 
     # Skills
     if load_skills:
@@ -370,6 +368,16 @@ def create_session(
             console_print=lambda msg: logger.debug("ext: %s", msg),
             agent_config=config,
         )
+
+    # Prompt layers (align with CLI bootstrap pattern)
+    layers: list[PromptLayer] = []
+    if load_context_files:
+        from tau.context_files import load_context_files as _load_ctx
+        ctx_text = _load_ctx(workspace)
+        if ctx_text:
+            layers.append(PromptLayer(name="workspace:context-files", content=ctx_text, priority=55))
+    layers.extend(ext_registry.prompt_layers())
+    apply_prompt_layers(context, layers)
 
     # Resume or create session
     if resume_id:

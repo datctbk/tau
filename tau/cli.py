@@ -18,6 +18,9 @@ from rich.rule import Rule
 from rich.style import Style
 from rich.text import Text
 from tau.config import TauConfig, ensure_tau_home, load_config, get_theme_file_paths
+from tau.cli_bootstrap import build_agent as _bootstrap_build_agent
+from tau.cli_bootstrap import make_agent_config as _bootstrap_make_agent_config
+from tau.cli_ui import run_mode as _run_mode
 from tau.core.agent import Agent
 from tau.core.context import ContextManager
 from tau.core.audit import append_audit_record
@@ -230,6 +233,7 @@ _AGENT_OPTIONS = [
         ),
     ),
     click.option("--topk", type=int, default=0, show_default=True, help="Top-k relevant memory entries to inject per turn (0 disables)."),
+    click.option("--minimal", is_flag=True, default=False, help="Run with minimal core profile (disable optional capabilities/extensions)."),
     click.option(
         "--prompt-budget/--no-prompt-budget",
         "prompt_budget",
@@ -260,132 +264,19 @@ def _build_agent(
     steering: SteeringChannel | None = None,
     tools_filter: str | None = None,
 ) -> tuple[Agent, ExtensionRegistry]:
-    registry = ToolRegistry()
-    register_builtin_tools(registry)
-
-    # --tools CLI flag takes precedence over config file settings
-    if tools_filter is not None:
-        requested = {t.strip() for t in tools_filter.split(",") if t.strip()}
-        for name in list(registry.names()):
-            if name not in requested:
-                registry.unregister(name)
-    # Apply configurable tool set: disabled / enabled_only
-    elif tau_config.tools.enabled_only:
-        allowed = set(tau_config.tools.enabled_only)
-        for name in list(registry.names()):
-            if name not in allowed:
-                registry.unregister(name)
-    elif tau_config.tools.disabled:
-        for name in tau_config.tools.disabled:
-            registry.unregister(name)
-
-    configure_shell(
-        require_confirmation=tau_config.shell.require_confirmation,
-        timeout=tau_config.shell.timeout,
-        allowed_commands=tau_config.shell.allowed_commands,
-        use_persistent_shell=tau_config.shell.use_persistent_shell,
-        confirm_hook=confirm_hook,
-        workspace_root=agent_config.workspace_root,
-    )
-    configure_fs(workspace_root=agent_config.workspace_root)
-    configure_context(
-        ollama_base_url=tau_config.ollama.base_url,
-        ollama_model=agent_config.model,
-    )
-    context = ContextManager(agent_config)
-    # Per-project system prompt override: .tau/SYSTEM.md
-    from tau.context_files import load_system_prompt_override
-    system_override = load_system_prompt_override(agent_config.workspace_root)
-    if system_override is not None:
-        agent_config.system_prompt = system_override
-        # Replace the system message already created by ContextManager
-        for m in context._messages:
-            if m.role == "system":
-                m.content = system_override
-                break
-    # Load AGENTS.md / CLAUDE.md context files
-    from tau.context_files import load_context_files
-    context_text = load_context_files(agent_config.workspace_root)
-    if context_text:
-        context.inject_prompt_fragment(context_text)
-    # Resolve package-supplied resource paths
-    try:
-        from tau.packages import PackageManager as _PM
-        _pm = _PM()
-        _pkg_skill_paths: list[str] = _pm.get_resource_paths("skills")
-        _pkg_extension_paths: list[str] = _pm.get_resource_paths("extensions")
-        _pkg_prompt_paths: list[str] = _pm.get_resource_paths("prompts")
-    except Exception:
-        _pkg_skill_paths = []
-        _pkg_extension_paths = []
-        _pkg_prompt_paths = []
-
-    loader = SkillLoader(
-        extra_paths=list(tau_config.skills.paths) + _pkg_skill_paths,
-        disabled=tau_config.skills.disabled,
-    )
-    loader.load_into(registry, context)
-    ext_registry = ExtensionRegistry(
-        extra_paths=list(tau_config.extensions.paths) + _pkg_extension_paths,
-        disabled=tau_config.extensions.disabled,
-    )
-    loaded_exts = ext_registry.load_all(
-        registry=registry,
-        context=context,
-        steering=steering,
-        console_print=console.print,
+    return _bootstrap_build_agent(
+        tau_config=tau_config,
         agent_config=agent_config,
-    )
-    if loaded_exts:
-        console.print(
-            "[dim]Loaded extensions: " + ", ".join(loaded_exts) + "[/dim]"
-        )
-    else:
-        console.print("[dim]Loaded extensions: (none)[/dim]")
-    if resume_id:
-        session = session_manager.load(resume_id)
-        context.restore(session.messages)
-        console.print(
-            f"[dim]Resumed session [bold]{session.id[:8]}[/bold]"
-            + (f" ({session.name})" if session.name else "")
-            + "[/dim]"
-        )
-    else:
-        session = session_manager.new_session(agent_config, name=session_name)
-    
-    # --- P1: Credential Pool ---
-    if tau_config.credential_pool_enabled and tau_config.capabilities.credential_pool:
-        from tau.core.credential_pool import CredentialPool
-        from tau.config import TAU_HOME
-        pool_path = Path(TAU_HOME) / "credentials" / "pool.json"
-        if pool_path.exists():
-            try:
-                pool = CredentialPool.load(pool_path)
-                cred = pool.select(provider=tau_config.provider)
-                if cred:
-                    if tau_config.provider == "openai":
-                        tau_config.openai.api_key = cred.api_key
-                        if cred.base_url:
-                            tau_config.openai.base_url = cred.base_url
-                    elif tau_config.provider == "google":
-                        tau_config.google.api_key = cred.api_key
-                logger.debug("Credential pool selected key for %s", tau_config.provider)
-            except Exception as e:
-                logger.warning("Failed to load credential pool: %s", e)
-
-    provider = get_provider(tau_config, agent_config)
-    agent = Agent(
-        config=agent_config,
-        provider=provider,
-        registry=registry,
-        context=context,
-        session=session,
         session_manager=session_manager,
-        steering=steering,
-        cost_calculator=tau_config.calculate_cost,
+        session_name=session_name,
+        resume_id=resume_id,
+        confirm_hook=confirm_hook,
         policy_approval_hook=policy_approval_hook,
+        steering=steering,
+        tools_filter=tools_filter,
+        print_fn=console.print,
+        provider_factory=get_provider,
     )
-    return agent, ext_registry
 
 def _make_agent_config(
     tau_config: TauConfig,
@@ -399,43 +290,21 @@ def _make_agent_config(
     max_cost: float | None = None,
     topk: int = 0,
     prompt_budget: bool | None = None,
+    minimal: bool = False,
 ) -> AgentConfig:
-    if provider:
-        tau_config.provider = provider
-    if no_confirm:
-        tau_config.shell.require_confirmation = False
-    if persistent_shell:
-        tau_config.shell.use_persistent_shell = True
-    if prompt_budget is not None:
-        tau_config.prompt_budget_enabled = bool(prompt_budget)
-    return AgentConfig(
-        provider=tau_config.provider,
-        model=model or tau_config.model,
-        thinking_level=think or "off",
-        thinking_budgets=tau_config.thinking_budgets.model_dump(),
-        max_tokens=tau_config.max_tokens,
-        max_turns=tau_config.max_turns,
-        system_prompt=tau_config.system_prompt,
-        trim_strategy=tau_config.trim_strategy,
-        compaction_enabled=tau_config.compaction_enabled,
-        compaction_threshold=tau_config.compaction_threshold,
-        workspace_root=str(Path(workspace).resolve()),
-        parallel_tools=tau_config.parallel_tools and not no_parallel,
-        parallel_tools_max_workers=tau_config.parallel_tools_max_workers,
-        max_cost=max_cost if max_cost is not None else tau_config.max_cost,
-        memory_topk=max(0, topk),
-        policy_enabled=tau_config.policy_enabled,
-        policy_profile=tau_config.policy_profile,
-        prompt_budget_enabled=bool(tau_config.prompt_budget_enabled),
-        prompt_budget_max_input_tokens=max(512, int(tau_config.prompt_budget_max_input_tokens)),
-        prompt_budget_output_reserve=max(0, int(tau_config.prompt_budget_output_reserve)),
-        prompt_budget_max_tools_total=max(1, int(tau_config.prompt_budget_max_tools_total)),
-        smart_routing_config=(
-            tau_config.smart_routing
-            if (tau_config.smart_routing.enabled and tau_config.capabilities.smart_routing)
-            else None
-        ),
-        capabilities=tau_config.capabilities.model_dump(),
+    return _bootstrap_make_agent_config(
+        tau_config=tau_config,
+        provider=provider,
+        model=model,
+        think=think,
+        no_confirm=no_confirm,
+        workspace=workspace,
+        no_parallel=no_parallel,
+        persistent_shell=persistent_shell,
+        max_cost=max_cost,
+        topk=topk,
+        prompt_budget=prompt_budget,
+        minimal=minimal,
     )
 
 # ---------------------------------------------------------------------------
@@ -3107,29 +2976,31 @@ def main() -> None:
 @click.argument("args", nargs=-1, required=False)
 @_agent_options
 def run_cmd(
-    args: tuple[str, ...],
-    provider: str | None,
-    model: str | None,
-    think: str | None,
-    image: tuple[str, ...],
-    resume_id: str | None,
-    session_name: str | None,
-    no_confirm: bool,
-    no_parallel: bool,
-    persistent_shell: bool,
-    workspace: str,
-    verbose: bool,
-    show_thinking: bool,
-    output_mode: str | None,
-    print_mode: bool,
-    template_name: str | None,
-    var: tuple[str, ...],
-    max_cost: float | None,
-    no_session: bool,
-    trace_log: str | None,
-    tools_filter: str | None,
+    args: tuple[str, ...] = (),
+    provider: str | None = None,
+    model: str | None = None,
+    think: str | None = None,
+    image: tuple[str, ...] = (),
+    resume_id: str | None = None,
+    session_name: str | None = None,
+    no_confirm: bool = False,
+    no_parallel: bool = False,
+    persistent_shell: bool = False,
+    workspace: str = ".",
+    verbose: bool = False,
+    show_thinking: bool = False,
+    output_mode: str | None = None,
+    print_mode: bool = False,
+    template_name: str | None = None,
+    var: tuple[str, ...] = (),
+    max_cost: float | None = None,
+    no_session: bool = False,
+    trace_log: str | None = None,
+    tools_filter: str | None = None,
     topk: int = 0,
+    minimal: bool = False,
     prompt_budget: bool | None = None,
+    prompt: str | None = None,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
     # Split args into @file tokens and plain text tokens.
@@ -3137,10 +3008,12 @@ def run_cmd(
     #      file_args=["@code.py", "@tests.py"], prompt="review these"
     file_args = [a for a in args if a.startswith("@")]
     text_args  = [a for a in args if not a.startswith("@")]
-    prompt: str | None = " ".join(text_args) if text_args else None
+    prompt_text: str | None = " ".join(text_args) if text_args else None
     if file_args:
         file_str = " ".join(file_args)
-        prompt = (file_str + "\n\n" + prompt) if prompt else file_str
+        prompt_text = (file_str + "\n\n" + prompt_text) if prompt_text else file_str
+    if prompt is not None:
+        prompt_text = prompt
     # Resolve output mode: --print flag takes precedence as shorthand
     mode = output_mode
     if print_mode:
@@ -3160,15 +3033,15 @@ def run_cmd(
             click.echo(f"Error: template {template_name!r} not found.", err=True)
             sys.exit(1)
         # Template becomes the prompt; any PROMPT arg is appended as extra context
-        if prompt:
-            prompt = rendered.rstrip() + "\n\n" + prompt
+        if prompt_text:
+            prompt_text = rendered.rstrip() + "\n\n" + prompt_text
         else:
-            prompt = rendered
+            prompt_text = rendered
 
     # Support piped stdin: if no prompt and stdin is not a TTY, read from stdin
-    if not prompt and not sys.stdin.isatty():
-        prompt = sys.stdin.read().strip()
-        if not prompt:
+    if not prompt_text and not sys.stdin.isatty():
+        prompt_text = sys.stdin.read().strip()
+        if not prompt_text:
             click.echo("Error: no prompt provided via argument or stdin.", err=True)
             sys.exit(1)
         # Default to print mode when piped, unless --mode was explicit
@@ -3197,6 +3070,7 @@ def run_cmd(
         persistent_shell=persistent_shell,
         max_cost=max_cost,
         topk=topk,
+        minimal=minimal,
         prompt_budget=prompt_budget,
     )
     if no_session:
@@ -3246,9 +3120,9 @@ def run_cmd(
     )
 
     # Expand @file references in the prompt (single-shot mode)
-    if prompt:
+    if prompt_text:
         from tau.editor import expand_at_files
-        prompt, _inlined = expand_at_files(prompt, agent_config.workspace_root)
+        prompt_text, _inlined = expand_at_files(prompt_text, agent_config.workspace_root)
 
     if mode == "rpc":
         from tau.rpc import run_rpc
@@ -3263,20 +3137,28 @@ def run_cmd(
         run_rpc(tau_session)
         return
 
-    if mode == "json":
-        if not prompt:
-            click.echo("Error: --mode json requires a prompt.", err=True)
-            sys.exit(1)
-        _render_events_json(agent, prompt, images=list(image) if image else None, ext_registry=ext_registry)
-    elif mode == "print":
-        if not prompt:
-            click.echo("Error: --mode print requires a prompt.", err=True)
-            sys.exit(1)
-        _render_events_print(agent, prompt, images=list(image) if image else None, ext_registry=ext_registry)
-    elif prompt:
-        _render_events(agent, prompt, verbose, images=list(image) if image else None, ext_registry=ext_registry, show_thinking=show_thinking)
-    else:
-        _repl(agent, agent_config, verbose, ext_registry=ext_registry, staged_images=list(image) if image else None, show_thinking=show_thinking, tau_config=tau_config, tools_filter=tools_filter)
+    _run_mode(
+        mode=mode,
+        prompt=prompt_text,
+        image=image,
+        agent=agent,
+        ext_registry=ext_registry,
+        show_thinking=show_thinking,
+        verbose=verbose,
+        render_json=lambda a, p, imgs, ext: _render_events_json(a, p, images=imgs, ext_registry=ext),
+        render_print=lambda a, p, imgs, ext: _render_events_print(a, p, images=imgs, ext_registry=ext),
+        render_stream=lambda a, p, v, imgs, ext, st: _render_events(a, p, v, images=imgs, ext_registry=ext, show_thinking=st),
+        render_repl=_repl,
+        repl_kwargs={
+            "agent_config": agent_config,
+            "verbose": verbose,
+            "ext_registry": ext_registry,
+            "staged_images": list(image) if image else None,
+            "show_thinking": show_thinking,
+            "tau_config": tau_config,
+            "tools_filter": tools_filter,
+        },
+    )
 
 # ---------------------------------------------------------------------------
 # `tau sessions` subcommands
@@ -3360,6 +3242,7 @@ def sessions_fork(
     template_name: str | None, var: tuple[str, ...],
     max_cost: float | None, no_session: bool,
     topk: int = 0,
+    minimal: bool = False,
     prompt_budget: bool | None = None,
 ) -> None:
     from tau.core.session import local_sessions_dir
@@ -3392,6 +3275,7 @@ def sessions_fork(
             no_parallel=no_parallel,
             max_cost=max_cost,
             topk=topk,
+            minimal=minimal,
             prompt_budget=prompt_budget,
         )
         steering = SteeringChannel()
@@ -3467,6 +3351,7 @@ def sessions_import(
     no_session: bool,
     trace_log: str | None,
     topk: int = 0,
+    minimal: bool = False,
     prompt_budget: bool | None = None,
 ) -> None:
     """Import a previously-exported JSON session file."""
@@ -3512,6 +3397,7 @@ def sessions_import(
             persistent_shell=persistent_shell,
             max_cost=max_cost,
             topk=topk,
+            minimal=minimal,
             prompt_budget=prompt_budget,
         )
         steering = SteeringChannel()

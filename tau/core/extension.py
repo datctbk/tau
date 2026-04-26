@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from tau.core.prompt_layers import PromptLayer
 from tau.core.types import ExtensionManifest, SlashCommand, ToolDefinition
 
 if TYPE_CHECKING:
@@ -99,6 +100,10 @@ class Extension:
     def on_unload(self) -> None:
         """Called when the extension is removed at runtime (future use)."""
         pass
+
+    def prompt_layers(self) -> list[PromptLayer]:
+        """Optional extra system-prompt layers for this extension."""
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -410,10 +415,6 @@ class ExtensionRegistry:
         for tool in tools:
             registry.register(tool)
 
-        # System prompt fragment
-        if ext.manifest.system_prompt_fragment:
-            context.inject_prompt_fragment(ext.manifest.system_prompt_fragment)
-
         # Slash commands
         for cmd in ext.slash_commands():
             if cmd.name in self._slash_index:
@@ -550,6 +551,24 @@ class ExtensionRegistry:
 
     def get(self, name: str) -> Extension | None:
         return self._extensions.get(name)
+
+    def prompt_layers(self) -> list[PromptLayer]:
+        """Collect prompt layers from loaded extensions."""
+        layers: list[PromptLayer] = []
+        for ext in self._extensions.values():
+            if ext.manifest.system_prompt_fragment:
+                layers.append(
+                    PromptLayer(
+                        name=f"ext:{ext.manifest.name}:manifest",
+                        content=ext.manifest.system_prompt_fragment,
+                        priority=60,
+                    )
+                )
+            try:
+                layers.extend(ext.prompt_layers())
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Extension %r prompt_layers() raised: %s", ext.manifest.name, exc)
+        return layers
 
     def __len__(self) -> int:
         return len(self._extensions)
