@@ -6,8 +6,7 @@ Phase A goal: provide a stable hook point without changing default behavior.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib.util
-from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Protocol
 
 from tau.core.types import ToolCall
@@ -32,37 +31,79 @@ class PolicyProfileEvaluator(Protocol):
     def decide(self, *, profile: str, call: ToolCall) -> PolicyDecision: ...
 
 
-class _AllowAllEvaluator:
-    """Minimal fallback: keep core safe and generic when no external evaluator is present."""
+class DefaultPolicyProfileEvaluator:
+    """Built-in profile evaluator kept inside core (no extension coupling)."""
+
+    @staticmethod
+    def _is_destructive_shell(command: str) -> bool:
+        risky = [
+            r"\brm\s+-rf\b",
+            r"\bmkfs\b",
+            r"\bdd\b",
+            r"\bshutdown\b",
+            r"\breboot\b",
+            r"\bhalt\b",
+            r"\bchmod\s+777\b",
+            r"\bchown\s+-R\b",
+            r"\bcurl\b.*\|\s*sh\b",
+            r"\bwget\b.*\|\s*sh\b",
+            r">\s*/dev/sd",
+        ]
+        c = command.lower()
+        return any(re.search(p, c) for p in risky)
+
+    def _classify_risk(self, call: ToolCall) -> str:
+        name = call.name
+        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls", "task_events"}:
+            return "low"
+        if name in {"write_file", "edit_file", "task_update", "task_stop", "task_create"}:
+            return "medium"
+        if name == "run_bash":
+            command = str(call.arguments.get("command", ""))
+            return "high" if self._is_destructive_shell(command) else "medium"
+        if name in {"web_search", "web_fetch", "agent"}:
+            return "high"
+        return "medium"
 
     def decide(self, *, profile: str, call: ToolCall) -> PolicyDecision:
-        _ = profile
-        _ = call
-        return PolicyDecision(allow=True, requires_approval=False, risk="low")
+        risk = self._classify_risk(call)
+
+        if profile == "dev":
+            return PolicyDecision(allow=True, requires_approval=False, risk=risk)
+
+        if profile == "strict":
+            if risk in {"high", "medium"}:
+                return PolicyDecision(
+                    allow=True,
+                    requires_approval=True,
+                    risk=risk,
+                    reason=f"Approval required by strict policy: {call.name} ({risk})",
+                )
+            return PolicyDecision(allow=True, requires_approval=False, risk=risk)
+
+        # balanced profile
+        if risk in {"high", "medium"}:
+            return PolicyDecision(
+                allow=True,
+                requires_approval=True,
+                risk=risk,
+                reason=f"Approval required by balanced policy: {call.name} ({risk})",
+            )
+        return PolicyDecision(allow=True, requires_approval=False, risk=risk)
 
 
-def _load_external_evaluator() -> PolicyProfileEvaluator:
-    """Load profile-specific policy evaluator from tau-assistant extension if present."""
-    try:
-        root = Path(__file__).resolve().parents[3]
-        candidates = [
-            root / "tau-assistant" / "policy_profiles.py",
-        ]
-        policy_file = next((p for p in candidates if p.is_file()), None)
-        if policy_file is None:
-            return _AllowAllEvaluator()
+_policy_profile_evaluator: PolicyProfileEvaluator | None = None
 
-        spec = importlib.util.spec_from_file_location("_tau_assistant_policy_profiles", str(policy_file))
-        if spec is None or spec.loader is None:
-            return _AllowAllEvaluator()
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        evaluator_cls = getattr(mod, "DefaultPolicyProfileEvaluator", None)
-        if evaluator_cls is None:
-            return _AllowAllEvaluator()
-        return evaluator_cls()
-    except Exception:  # noqa: BLE001
-        return _AllowAllEvaluator()
+
+def register_policy_profile_evaluator(evaluator: PolicyProfileEvaluator | None) -> None:
+    """Register/override the policy profile evaluator used by core policy hook."""
+    global _policy_profile_evaluator
+    _policy_profile_evaluator = evaluator
+
+
+def clear_policy_profile_evaluator() -> None:
+    """Clear any externally registered evaluator and fall back to core default."""
+    register_policy_profile_evaluator(None)
 
 
 class DefaultToolPolicyHook:
@@ -74,28 +115,25 @@ class DefaultToolPolicyHook:
 
     def __init__(self, *, profile: str = "balanced") -> None:
         self._profile = profile
-        self._evaluator = _load_external_evaluator()
+        self._evaluator = _policy_profile_evaluator or DefaultPolicyProfileEvaluator()
 
     @staticmethod
-    def _is_preapproved_by_assistant(call: ToolCall) -> bool:
-        """Avoid duplicate approval prompts when assistant already gated risk.
+    def _is_preapproved_upstream(call: ToolCall) -> bool:
+        """Avoid duplicate approval prompts when caller already gated risk.
 
-        tau-assistant's workflow gate uses the explicit ``approved_risky_actions``
-        parameter. If it is true, core policy should not prompt again for the same
-        user decision.
+        Any tool may pass ``approved_risky_actions=true`` when explicit user
+        approval has already been captured upstream.
         """
-        if call.name != "assistant_workflow_run":
-            return False
         return bool(call.arguments.get("approved_risky_actions", False))
 
     def before_tool_call(self, *, agent: "Agent", call: ToolCall) -> PolicyDecision:
         _ = agent
         decision = self._evaluator.decide(profile=self._profile, call=call)
-        if decision.requires_approval and self._is_preapproved_by_assistant(call):
+        if decision.requires_approval and self._is_preapproved_upstream(call):
             return PolicyDecision(
                 allow=decision.allow,
                 requires_approval=False,
                 risk=decision.risk,
-                reason="Approval already confirmed by assistant workflow gate.",
+                reason="Approval already confirmed by upstream workflow gate.",
             )
         return decision

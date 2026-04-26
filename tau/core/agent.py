@@ -38,10 +38,7 @@ from tau.core.audit import append_audit_record
 from tau.core.assistant_events import append_assistant_event, make_assistant_event
 from tau.core.policy import DefaultToolPolicyHook
 from tau.core.context import _messages_tokens
-from tau.core.prompt_caching import apply_anthropic_cache_control
-from tau.core.rate_limit_tracker import parse_rate_limit_headers, RateLimitState
-from tau.core.smart_routing import resolve_turn_route
-from tau.core.usage_pricing import estimate_usage_cost
+from tau.core.capabilities import build_capabilities
 
 if TYPE_CHECKING:
     from tau.core.context import ContextManager
@@ -117,10 +114,11 @@ class Agent:
         self._context = context
         self._session = session
         self._session_manager = session_manager
-        self._rate_limit_state: RateLimitState | None = None
+        self._rate_limit_state: object | None = None
         self._steering = steering
         self._cost_calculator = cost_calculator
         self._policy_approval_hook = policy_approval_hook
+        self._capabilities = build_capabilities(config)
         self._policy_hook = (
             DefaultToolPolicyHook(profile=config.policy_profile)
             if config.policy_enabled
@@ -268,12 +266,17 @@ class Agent:
 
             # --- P1: Smart Routing ---
             if getattr(self._config, "smart_routing_config", None):
-                route = resolve_turn_route(
-                    user_input, 
-                    routing_config=self._config.smart_routing_config.to_routing_dict() if hasattr(self._config.smart_routing_config, "to_routing_dict") else self._config.smart_routing_config,
-                    primary={"model": self._config.model, "provider": self._provider.name, "base_url": ""}  # Approximation
+                routing_cfg = (
+                    self._config.smart_routing_config.to_routing_dict()
+                    if hasattr(self._config.smart_routing_config, "to_routing_dict")
+                    else self._config.smart_routing_config
                 )
-                if route.get("model") != self._config.model and hasattr(self._provider, "swap_model"):
+                route = self._capabilities.resolve_route(
+                    user_input, 
+                    routing_cfg,
+                    primary={"model": self._config.model, "provider": self._provider.name, "base_url": ""}  # Approximation
+                ) or {}
+                if route and route.get("model") != self._config.model and hasattr(self._provider, "swap_model"):
                     route_provider = route.get("provider") or self._provider.name
                     if route_provider == self._provider.name:
                         logger.debug("Smart routing selected cheap model: %s", route["model"])
@@ -311,8 +314,8 @@ class Agent:
             if hasattr(self._provider, "last_response_headers"):
                 headers = self._provider.last_response_headers
                 if headers:
-                    rl_state = parse_rate_limit_headers(headers, provider=self._provider.name)
-                    if rl_state and rl_state.has_data:
+                    rl_state = self._capabilities.parse_rate_limits(headers, self._provider.name)
+                    if rl_state and getattr(rl_state, "has_data", False):
                         self._rate_limit_state = rl_state
                         # Attach state to session so the /usage slash command can access it
                         if hasattr(self._session, "rate_limit_state"):
@@ -390,10 +393,18 @@ class Agent:
 
             # Budget guard: check if session cost exceeds --max-cost
             if self._config.max_cost > 0 and cu is not None:
-                from tau.core.usage_pricing import CanonicalUsage
-                c_usage = CanonicalUsage(**cu)
-                cost_result = estimate_usage_cost(self._config.model, c_usage, provider=self._provider.name)
-                session_cost = float(cost_result.amount_usd or 0.0)
+                session_cost = self._capabilities.estimate_usage_cost(
+                    self._config.model, cu, self._provider.name
+                )
+                if session_cost <= 0.0 and self._cost_calculator is not None:
+                    class _U:
+                        pass
+                    _u = _U()
+                    _u.input_tokens = cu.get("input_tokens", 0)         # type: ignore[attr-defined]
+                    _u.output_tokens = cu.get("output_tokens", 0)       # type: ignore[attr-defined]
+                    _u.cache_read_tokens = cu.get("cache_read_tokens", 0)  # type: ignore[attr-defined]
+                    _u.cache_write_tokens = cu.get("cache_write_tokens", 0)  # type: ignore[attr-defined]
+                    session_cost = float(self._cost_calculator(self._config.model, _u))
                 if session_cost >= self._config.max_cost:
                     yield TurnComplete(usage=response.usage)
                     yield CostLimitExceeded(session_cost=session_cost, max_cost=self._config.max_cost)
@@ -696,16 +707,9 @@ class Agent:
         for attempt in range(1, max_attempts + 1):
             try:
                 messages, tools = self._prepare_request_payload()
-                
-                # --- P1: Prompt Caching ---
-                if self._provider.name == "openai" and "claude" in self._config.model.lower():
-                    messages = apply_anthropic_cache_control(
-                        [m.to_dict() for m in messages], 
-                        cache_ttl="5m"
-                    )
-                    # Restore to Message objects
-                    from tau.core.types import Message
-                    messages = [Message.from_dict(m) for m in messages]
+                messages = self._capabilities.apply_prompt_caching(
+                    messages, self._config.model, self._provider.name
+                )
 
                 _trace.log_request(messages, tools)
                 raw = self._provider.chat(

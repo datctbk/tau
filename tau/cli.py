@@ -354,7 +354,7 @@ def _build_agent(
         session = session_manager.new_session(agent_config, name=session_name)
     
     # --- P1: Credential Pool ---
-    if tau_config.credential_pool_enabled:
+    if tau_config.credential_pool_enabled and tau_config.capabilities.credential_pool:
         from tau.core.credential_pool import CredentialPool
         from tau.config import TAU_HOME
         pool_path = Path(TAU_HOME) / "credentials" / "pool.json"
@@ -430,7 +430,12 @@ def _make_agent_config(
         prompt_budget_max_input_tokens=max(512, int(tau_config.prompt_budget_max_input_tokens)),
         prompt_budget_output_reserve=max(0, int(tau_config.prompt_budget_output_reserve)),
         prompt_budget_max_tools_total=max(1, int(tau_config.prompt_budget_max_tools_total)),
-        smart_routing_config=tau_config.smart_routing if tau_config.smart_routing.enabled else None,
+        smart_routing_config=(
+            tau_config.smart_routing
+            if (tau_config.smart_routing.enabled and tau_config.capabilities.smart_routing)
+            else None
+        ),
+        capabilities=tau_config.capabilities.model_dump(),
     )
 
 # ---------------------------------------------------------------------------
@@ -719,10 +724,13 @@ def _render_events(
             # actually, calculate_cost doing `getattr(..., "input_tokens", 0)` will fail if it's a dict! 
             # So I will pass a dummy object, or just calculate it directly if it's easier.
             cu = getattr(agent._session, "cumulative_usage", {})
-            from tau.core.usage_pricing import estimate_usage_cost, CanonicalUsage
-            c_usage = CanonicalUsage(**cu) if cu else CanonicalUsage()
-            cost_result = estimate_usage_cost(agent._config.model, c_usage, provider=agent._config.provider)
-            session_cost = float(cost_result.amount_usd or 0.0)
+            session_cost = 0.0
+            if tau_config.capabilities.usage_pricing:
+                from tau.core.usage_pricing import estimate_usage_cost, CanonicalUsage
+
+                c_usage = CanonicalUsage(**cu) if cu else CanonicalUsage()
+                cost_result = estimate_usage_cost(agent._config.model, c_usage, provider=agent._config.provider)
+                session_cost = float(cost_result.amount_usd or 0.0)
             cost_str = f" — session cost: ${session_cost:.3f}" if session_cost > 0 else ""
 
             if output_fn:

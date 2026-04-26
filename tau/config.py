@@ -132,6 +132,15 @@ class SmartRoutingConfig(BaseSettings):
         }
 
 
+class CapabilitiesConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAU_CAPABILITIES_")
+    prompt_caching: bool = True
+    rate_limit_tracking: bool = True
+    smart_routing: bool = True
+    usage_pricing: bool = True
+    credential_pool: bool = True
+
+
 # ---------------------------------------------------------------------------
 # Built-in theme presets
 # ---------------------------------------------------------------------------
@@ -304,6 +313,7 @@ class TauConfig(BaseSettings):
     theme: ThemeConfig = ThemeConfig()
     tools: ToolsConfig = ToolsConfig()
     smart_routing: SmartRoutingConfig = SmartRoutingConfig()
+    capabilities: CapabilitiesConfig = CapabilitiesConfig()
     credential_pool_enabled: bool = False
 
     @field_validator("trim_strategy")
@@ -384,6 +394,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
         init["thinking_budgets"] = raw["thinking_budgets"]
     if "smart_routing" in raw:
         init["smart_routing"] = raw["smart_routing"]
+    if "capabilities" in raw:
+        init["capabilities"] = raw["capabilities"]
     if raw.get("credential_pool_enabled") is not None:
         init["credential_pool_enabled"] = raw["credential_pool_enabled"]
     if "theme" in raw:

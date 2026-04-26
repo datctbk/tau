@@ -215,6 +215,8 @@ class AgentConfig:
     dynamic_prompt_builder_enabled: bool = False
     # --- smart model routing ---
     smart_routing_config: dict | None = None  # None = disabled
+    # --- optional infrastructure capabilities ---
+    capabilities: dict[str, bool] | None = None
 
 # ---------------------------------------------------------------------------
 # Compaction
