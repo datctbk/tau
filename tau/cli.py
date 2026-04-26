@@ -2561,7 +2561,6 @@ def _repl(
         return Point(x=0, y=y)
 
     def _append_output(text: str, *, force_full_repaint: bool = False) -> None:
-
         if not text:
             return
 
