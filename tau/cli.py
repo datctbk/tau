@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -2466,6 +2467,10 @@ def _repl(
     cancel_requested = threading.Event()
     app_ref: list[Application | None] = [None]
     output_text_parts: list[str] = []
+    # Keep TUI output bounded so long sessions do not degrade render latency.
+    # Tunable via env vars for power users.
+    _OUTPUT_MAX_LINES = max(500, int(os.getenv("TAU_TUI_MAX_LINES", "8000")))
+    _OUTPUT_MAX_CHARS = max(50_000, int(os.getenv("TAU_TUI_MAX_CHARS", "1200000")))
     _staged_images = staged_images or []
     _scroll_offset: list[int] = [0]  # 0 = follow bottom; >0 = lines from bottom
 
@@ -2502,6 +2507,8 @@ def _repl(
         + f"{_DIM}{'═' * 60}{_RESET}\n"
     )
     output_text_parts.append(header)
+    _output_total_chars: list[int] = [len(header)]
+    _output_total_lines: list[int] = [header.count("\n")]
 
     # -- buffers -------------------------------------------------------------
     _completer = _TauCompleter()
@@ -2535,8 +2542,41 @@ def _repl(
         return Point(x=0, y=y)
 
     def _append_output(text: str, *, force_full_repaint: bool = False) -> None:
+
+        if not text:
+            return
+
+        def _shift_live_status_indices(removed_count: int) -> None:
+            if removed_count <= 0:
+                return
+            for key, idx in list(_live_status_idx.items()):
+                new_idx = idx - removed_count
+                if new_idx < 0:
+                    _live_status_idx.pop(key, None)
+                else:
+                    _live_status_idx[key] = new_idx
+
+        def _prune_output_buffer_locked() -> None:
+            removed_count = 0
+            while (
+                len(output_text_parts) > 1
+                and (
+                    _output_total_chars[0] > _OUTPUT_MAX_CHARS
+                    or _output_total_lines[0] > _OUTPUT_MAX_LINES
+                )
+            ):
+                removed = output_text_parts.pop(0)
+                _output_total_chars[0] -= len(removed)
+                _output_total_lines[0] -= removed.count("\n")
+                removed_count += 1
+            if removed_count:
+                _shift_live_status_indices(removed_count)
+
         with _output_lock:
             output_text_parts.append(text)
+            _output_total_chars[0] += len(text)
+            _output_total_lines[0] += text.count("\n")
+            _prune_output_buffer_locked()
         if app_ref[0]:
             if force_full_repaint:
                 try:

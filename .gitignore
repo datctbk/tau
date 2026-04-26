@@ -13,3 +13,6 @@ tau/extensions/__pycache__/pretty_json.cpython-312.pyc
 tau/extensions/__pycache__/word_count.cpython-312.pyc
 .tau/audit/assistant-actions.jsonl
 .tau/events/assistant-events.jsonl
+tau/extensions/__pycache__/pretty_json.cpython-311.pyc
+tau/extensions/__pycache__/pretty_json.cpython-311.pyc
+tau/extensions/__pycache__/word_count.cpython-311.pyc
