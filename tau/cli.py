@@ -2534,10 +2534,17 @@ def _repl(
         y = max(0, _parsed_line_count[0] - 1 - _scroll_offset[0])
         return Point(x=0, y=y)
 
-    def _append_output(text: str) -> None:
+    def _append_output(text: str, *, force_full_repaint: bool = False) -> None:
         with _output_lock:
             output_text_parts.append(text)
         if app_ref[0]:
+            if force_full_repaint:
+                try:
+                    # Trigger a full erase+redraw to clear wrapped-line artifacts
+                    # immediately, without requiring a manual terminal resize.
+                    app_ref[0].renderer.reset()
+                except Exception:
+                    pass
             app_ref[0].invalidate()
 
     # Capture uncaught exceptions into the TUI output pane instead of letting
@@ -2553,7 +2560,8 @@ def _repl(
             trace_text = "".join(lines[-18:]).strip()
             _append_output(
                 "\n\033[31m✗ Unhandled exception\033[0m\n"
-                + ("\033[2m" + trace_text + "\033[0m\n" if trace_text else f"{exc_type.__name__}: {exc_value}\n")
+                + ("\033[2m" + trace_text + "\033[0m\n" if trace_text else f"{exc_type.__name__}: {exc_value}\n"),
+                force_full_repaint=True,
             )
             if app_ref[0]:
                 app_ref[0].invalidate()
@@ -2739,7 +2747,7 @@ def _repl(
                 cancel_event=cancel_requested,
             )
         except Exception as exc:
-            _append_output(f"\nError: {exc}\n")
+            _append_output(f"\nError: {exc}\n", force_full_repaint=True)
         finally:
             cancel_requested.clear()
             agent_running.clear()
