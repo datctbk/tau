@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from tau.core.types import AgentConfig, CompactionEntry, Message, Role
+from tau.core.prompt_builder import DynamicPromptBuilder
 
 if TYPE_CHECKING:
     pass
@@ -332,9 +333,19 @@ class ContextManager:
         )
         self.compactor = Compactor(config)
 
-        # Inject system prompt
+        # Initialize the dynamic prompt builder reserving 20% of the overall window for context
+        self.prompt_builder = None
+        if config.dynamic_prompt_builder_enabled:
+            budget = max(1000, config.max_tokens // 5)
+            self.prompt_builder = DynamicPromptBuilder(max_tokens=budget)
+
+        # Inject base system prompt
         if config.system_prompt:
-            self._messages.append(Message(role="system", content=config.system_prompt))
+            if self.prompt_builder:
+                self.prompt_builder.add_fragment("base_persona", config.system_prompt, priority=100)
+                self._messages.append(Message(role="system", content=self.prompt_builder.build()))
+            else:
+                self._messages.append(Message(role="system", content=config.system_prompt))
 
     # ------------------------------------------------------------------
     # Public API
@@ -371,11 +382,28 @@ class ContextManager:
             if d.get("role") != "system"
         ]
 
-    def inject_prompt_fragment(self, fragment: str) -> None:
-        """Append extra context to the system message (used by skills)."""
+    def _update_system_message(self) -> None:
+        if not self.prompt_builder:
+            return
+        new_content = self.prompt_builder.build()
+        if not new_content:
+            return
         for m in self._messages:
             if m.role == "system":
-                m.content = m.content.rstrip() + "\n\n" + fragment
+                m.content = new_content
                 return
-        # No system message yet — create one
-        self._messages.insert(0, Message(role="system", content=fragment))
+        self._messages.insert(0, Message(role="system", content=new_content))
+
+    def inject_prompt_fragment(self, fragment: str, name: str | None = None, priority: int = 50) -> None:
+        """Append extra context to the system message via the dynamic builder or static concat."""
+        if self.prompt_builder:
+            resolved_name = name or f"fragment_{len(self.prompt_builder.fragments)}"
+            self.prompt_builder.add_fragment(resolved_name, fragment, priority=priority)
+            self._update_system_message()
+        else:
+            for m in self._messages:
+                if m.role == "system":
+                    m.content = m.content.rstrip() + "\n\n" + fragment
+                    return
+            # No system message yet — create one
+            self._messages.insert(0, Message(role="system", content=fragment))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Generator
 from typing import Any
@@ -41,6 +42,20 @@ class GoogleProvider:
         self._model = agent_config.model
         self._client = genai.Client(api_key=config.google.api_key or None)
         self._gtypes = gtypes
+        self._last_response_headers: dict[str, str] = {}
+
+    @property
+    def last_response_headers(self) -> dict[str, str]:
+        return self._last_response_headers
+
+    @contextlib.contextmanager
+    def swap_model(self, model: str):
+        old_model = self._model
+        self._model = model
+        try:
+            yield
+        finally:
+            self._model = old_model
 
     @property
     def name(self) -> str:
@@ -198,13 +213,20 @@ def _split_messages(messages: list[Message], gtypes: Any) -> tuple[str, list[dic
     last_user = ""
     last_user_images: list[str] | None = None
 
-    for m in messages:
+    # Keep exactly one active user turn as the final request sent to Gemini.
+    last_user_idx = -1
+    for idx, m in enumerate(messages):
+        if m.role == "user":
+            last_user_idx = idx
+
+    for idx, m in enumerate(messages):
         if m.role == "system":
             system_parts.append(m.content)
         elif m.role == "user":
-            last_user = m.content
-            last_user_images = m.images
-            if history:
+            if idx == last_user_idx:
+                last_user = m.content
+                last_user_images = m.images
+            else:
                 history.append({"role": "user", "parts": _build_parts(m.content, m.images, gtypes)})
         elif m.role == "assistant":
             history.append({"role": "model", "parts": _build_parts(m.content or "", m.images, gtypes)})

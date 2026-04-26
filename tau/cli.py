@@ -352,6 +352,27 @@ def _build_agent(
         )
     else:
         session = session_manager.new_session(agent_config, name=session_name)
+    
+    # --- P1: Credential Pool ---
+    if tau_config.credential_pool_enabled:
+        from tau.core.credential_pool import CredentialPool
+        from tau.config import TAU_HOME
+        pool_path = Path(TAU_HOME) / "credentials" / "pool.json"
+        if pool_path.exists():
+            try:
+                pool = CredentialPool.load(pool_path)
+                cred = pool.select(provider=tau_config.provider)
+                if cred:
+                    if tau_config.provider == "openai":
+                        tau_config.openai.api_key = cred.api_key
+                        if cred.base_url:
+                            tau_config.openai.base_url = cred.base_url
+                    elif tau_config.provider == "google":
+                        tau_config.google.api_key = cred.api_key
+                logger.debug("Credential pool selected key for %s", tau_config.provider)
+            except Exception as e:
+                logger.warning("Failed to load credential pool: %s", e)
+
     provider = get_provider(tau_config, agent_config)
     agent = Agent(
         config=agent_config,
@@ -409,6 +430,7 @@ def _make_agent_config(
         prompt_budget_max_input_tokens=max(512, int(tau_config.prompt_budget_max_input_tokens)),
         prompt_budget_output_reserve=max(0, int(tau_config.prompt_budget_output_reserve)),
         prompt_budget_max_tools_total=max(1, int(tau_config.prompt_budget_max_tools_total)),
+        smart_routing_config=tau_config.smart_routing if tau_config.smart_routing.enabled else None,
     )
 
 # ---------------------------------------------------------------------------
@@ -697,13 +719,10 @@ def _render_events(
             # actually, calculate_cost doing `getattr(..., "input_tokens", 0)` will fail if it's a dict! 
             # So I will pass a dummy object, or just calculate it directly if it's easier.
             cu = getattr(agent._session, "cumulative_usage", {})
-            class _DummyUsage:
-                input_tokens = cu.get("input_tokens", 0)
-                output_tokens = cu.get("output_tokens", 0)
-                cache_read_tokens = cu.get("cache_read_tokens", 0)
-                cache_write_tokens = cu.get("cache_write_tokens", 0)
-            
-            session_cost = tau_config.calculate_cost(agent._config.model, _DummyUsage())
+            from tau.core.usage_pricing import estimate_usage_cost, CanonicalUsage
+            c_usage = CanonicalUsage(**cu) if cu else CanonicalUsage()
+            cost_result = estimate_usage_cost(agent._config.model, c_usage, provider=agent._config.provider)
+            session_cost = float(cost_result.amount_usd or 0.0)
             cost_str = f" — session cost: ${session_cost:.3f}" if session_cost > 0 else ""
 
             if output_fn:

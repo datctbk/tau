@@ -111,6 +111,27 @@ class ExtensionsConfig(BaseSettings):
     disabled: list[str] = []
 
 
+class SmartRoutingConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAU_SMART_ROUTING_")
+    enabled: bool = False
+    cheap_model_provider: str = "unsloth"
+    cheap_model: str = "gemma-4-26B-A4B-it-GGUF"
+    max_simple_chars: int = 160
+    max_simple_words: int = 28
+
+    def to_routing_dict(self) -> dict:
+        """Convert to the dict format expected by smart_routing module."""
+        return {
+            "enabled": self.enabled,
+            "max_simple_chars": self.max_simple_chars,
+            "max_simple_words": self.max_simple_words,
+            "cheap_model": {
+                "provider": self.cheap_model_provider,
+                "model": self.cheap_model,
+            },
+        }
+
+
 # ---------------------------------------------------------------------------
 # Built-in theme presets
 # ---------------------------------------------------------------------------
@@ -265,6 +286,7 @@ class TauConfig(BaseSettings):
     prompt_budget_max_input_tokens: int = 3200
     prompt_budget_output_reserve: int = 1000
     prompt_budget_max_tools_total: int = 12
+    dynamic_prompt_builder_enabled: bool = False
 
     # provider sub-configs
     openai: OpenAIProviderConfig = OpenAIProviderConfig()
@@ -281,6 +303,8 @@ class TauConfig(BaseSettings):
     thinking_budgets: ThinkingBudgetsConfig = ThinkingBudgetsConfig()
     theme: ThemeConfig = ThemeConfig()
     tools: ToolsConfig = ToolsConfig()
+    smart_routing: SmartRoutingConfig = SmartRoutingConfig()
+    credential_pool_enabled: bool = False
 
     @field_validator("trim_strategy")
     @classmethod
@@ -358,6 +382,10 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
         init["pricing"] = raw["pricing"]
     if "thinking_budgets" in raw:
         init["thinking_budgets"] = raw["thinking_budgets"]
+    if "smart_routing" in raw:
+        init["smart_routing"] = raw["smart_routing"]
+    if raw.get("credential_pool_enabled") is not None:
+        init["credential_pool_enabled"] = raw["credential_pool_enabled"]
     if "theme" in raw:
         init["theme"] = raw["theme"]
     # Dedicated ~/.tau/theme.toml overlays the [theme] section in config.toml.

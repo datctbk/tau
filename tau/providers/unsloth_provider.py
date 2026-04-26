@@ -166,6 +166,21 @@ class UnslothProvider:
         self._client = httpx.Client(timeout=self._request_timeout)
         self._stream_yield_every_chunks = max(0, int(config.unsloth.stream_yield_every_chunks))
         self._stream_yield_s = max(0.0, float(config.unsloth.stream_yield_ms) / 1000.0)
+        self._last_response_headers: dict[str, str] = {}
+
+    @property
+    def last_response_headers(self) -> dict[str, str]:
+        return self._last_response_headers
+
+    import contextlib
+    @contextlib.contextmanager
+    def swap_model(self, model: str):
+        old_model = self._model
+        self._model = model
+        try:
+            yield
+        finally:
+            self._model = old_model
 
     @property
     def name(self) -> str:
@@ -203,6 +218,7 @@ class UnslothProvider:
         resp = self._client.post(
             f"{self._base_url}/chat/completions", json=payload,
         )
+        self._last_response_headers = dict(resp.headers)
         resp.raise_for_status()
         data = resp.json()
         parsed = _parse_response(data)
@@ -231,6 +247,7 @@ class UnslothProvider:
                 json=payload,
                 timeout=self._stream_timeout,
             ) as resp:
+                self._last_response_headers = dict(resp.headers)
                 resp.raise_for_status()
                 for line in resp.iter_lines():
                     if not line or not line.startswith("data: "):

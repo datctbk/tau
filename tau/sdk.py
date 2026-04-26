@@ -305,6 +305,7 @@ def create_session(
     if system_prompt is not None:
         config.system_prompt = system_prompt
     config.workspace_root = workspace
+    config.dynamic_prompt_builder_enabled = tau_config.dynamic_prompt_builder_enabled
 
     # Shell / tool config
     tau_config.shell.require_confirmation = shell_confirm

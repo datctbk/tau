@@ -212,6 +212,9 @@ class AgentConfig:
     prompt_budget_max_input_tokens: int = 3200
     prompt_budget_output_reserve: int = 1000
     prompt_budget_max_tools_total: int = 12
+    dynamic_prompt_builder_enabled: bool = False
+    # --- smart model routing ---
+    smart_routing_config: dict | None = None  # None = disabled
 
 # ---------------------------------------------------------------------------
 # Compaction

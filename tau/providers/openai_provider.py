@@ -38,10 +38,25 @@ class OpenAIProvider:
 
         self._agent_config = agent_config
         self._model = agent_config.model
+        self._last_response_headers: dict[str, str] = {}
         self._client = OpenAI(
             api_key=config.openai.api_key or None,
             base_url=config.openai.base_url,
         )
+
+    @property
+    def last_response_headers(self) -> dict[str, str]:
+        return self._last_response_headers
+
+    import contextlib
+    @contextlib.contextmanager
+    def swap_model(self, model: str):
+        old_model = self._model
+        self._model = model
+        try:
+            yield
+        finally:
+            self._model = old_model
 
     @property
     def name(self) -> str:
@@ -87,7 +102,9 @@ class OpenAIProvider:
     # ------------------------------------------------------------------
 
     def _chat_blocking(self, kwargs: dict[str, Any]) -> ProviderResponse:
-        response = self._client.chat.completions.create(**kwargs)
+        raw_resp = self._client.chat.completions.with_raw_response.create(**kwargs)
+        self._last_response_headers = dict(raw_resp.headers)
+        response = raw_resp.parse()
         choice = response.choices[0]
         msg = choice.message
         finish = choice.finish_reason or "stop"
@@ -117,7 +134,10 @@ class OpenAIProvider:
         stop_reason: StopReason = "end_turn"
         usage = TokenUsage()
 
-        with self._client.chat.completions.create(**kwargs) as stream:
+        raw_resp = self._client.chat.completions.with_raw_response.create(**kwargs)
+        self._last_response_headers = dict(raw_resp.headers)
+
+        with raw_resp.parse() as stream:
             for chunk in stream:
                 # Usage chunk (last chunk when stream_options.include_usage=True)
                 if chunk.usage:

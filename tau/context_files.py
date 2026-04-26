@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from tau.core.subdirectory_hints import SubdirectoryHintEngine
+
 logger = logging.getLogger(__name__)
 
 # File names we recognise (case-sensitive on Unix, but we check both forms)
@@ -82,6 +84,14 @@ def load_context_files(workspace_root: str) -> str:
                 logger.debug("Loaded context file: %s", path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not read context file %s: %s", path, exc)
+    # Inject Subdirectory Hints
+    hint_engine = SubdirectoryHintEngine(workspace_root)
+    hints_text = hint_engine.generate_hints()
+    if hints_text:
+        parts.append(f"# Subdirectory Hints\n\n{hints_text}")
+
+    if not parts:
+        return ""
 
     return "\n\n---\n\n".join(parts)
 

@@ -38,6 +38,10 @@ from tau.core.audit import append_audit_record
 from tau.core.assistant_events import append_assistant_event, make_assistant_event
 from tau.core.policy import DefaultToolPolicyHook
 from tau.core.context import _messages_tokens
+from tau.core.prompt_caching import apply_anthropic_cache_control
+from tau.core.rate_limit_tracker import parse_rate_limit_headers, RateLimitState
+from tau.core.smart_routing import resolve_turn_route
+from tau.core.usage_pricing import estimate_usage_cost
 
 if TYPE_CHECKING:
     from tau.core.context import ContextManager
@@ -113,6 +117,7 @@ class Agent:
         self._context = context
         self._session = session
         self._session_manager = session_manager
+        self._rate_limit_state: RateLimitState | None = None
         self._steering = steering
         self._cost_calculator = cost_calculator
         self._policy_approval_hook = policy_approval_hook
@@ -261,8 +266,31 @@ class Agent:
             logger.debug("Agent turn %d", turns)
             self._context.trim()
 
-            # Provider call — with auto-retry and overflow handling
-            raw, error_event = yield from self._call_with_retry()
+            # --- P1: Smart Routing ---
+            if getattr(self._config, "smart_routing_config", None):
+                route = resolve_turn_route(
+                    user_input, 
+                    routing_config=self._config.smart_routing_config.to_routing_dict() if hasattr(self._config.smart_routing_config, "to_routing_dict") else self._config.smart_routing_config,
+                    primary={"model": self._config.model, "provider": self._provider.name, "base_url": ""}  # Approximation
+                )
+                if route.get("model") != self._config.model and hasattr(self._provider, "swap_model"):
+                    route_provider = route.get("provider") or self._provider.name
+                    if route_provider == self._provider.name:
+                        logger.debug("Smart routing selected cheap model: %s", route["model"])
+                        with self._provider.swap_model(route["model"]):
+                            raw, error_event = yield from self._call_with_retry()
+                    else:
+                        logger.warning(
+                            "Smart routing skipped: provider mismatch (primary=%s vs cheap=%s). "
+                            "Cross-provider routing requires a future architecture update.",
+                            self._provider.name, route_provider
+                        )
+                        raw, error_event = yield from self._call_with_retry()
+                else:
+                    raw, error_event = yield from self._call_with_retry()
+            else:
+                raw, error_event = yield from self._call_with_retry()
+
             if error_event is not None:
                 yield error_event
                 return
@@ -278,6 +306,17 @@ class Agent:
 
             # Stream deltas live; collect the final ProviderResponse
             response, had_deltas, steer_msg = yield from self._stream(raw)
+
+            # --- P1: Rate Limit Tracking ---
+            if hasattr(self._provider, "last_response_headers"):
+                headers = self._provider.last_response_headers
+                if headers:
+                    rl_state = parse_rate_limit_headers(headers, provider=self._provider.name)
+                    if rl_state and rl_state.has_data:
+                        self._rate_limit_state = rl_state
+                        # Attach state to session so the /usage slash command can access it
+                        if hasattr(self._session, "rate_limit_state"):
+                            self._session.rate_limit_state = rl_state
 
             # Mid-stream steer: discard current response, start a new turn
             if steer_msg is not None:
@@ -350,15 +389,11 @@ class Agent:
                 cu["cache_write_tokens"] += response.usage.cache_write_tokens
 
             # Budget guard: check if session cost exceeds --max-cost
-            if self._config.max_cost > 0 and cu is not None and self._cost_calculator:
-                class _U:
-                    pass
-                _u = _U()
-                _u.input_tokens = cu["input_tokens"]        # type: ignore[attr-defined]
-                _u.output_tokens = cu["output_tokens"]      # type: ignore[attr-defined]
-                _u.cache_read_tokens = cu["cache_read_tokens"]  # type: ignore[attr-defined]
-                _u.cache_write_tokens = cu["cache_write_tokens"]  # type: ignore[attr-defined]
-                session_cost = self._cost_calculator(self._config.model, _u)
+            if self._config.max_cost > 0 and cu is not None:
+                from tau.core.usage_pricing import CanonicalUsage
+                c_usage = CanonicalUsage(**cu)
+                cost_result = estimate_usage_cost(self._config.model, c_usage, provider=self._provider.name)
+                session_cost = float(cost_result.amount_usd or 0.0)
                 if session_cost >= self._config.max_cost:
                     yield TurnComplete(usage=response.usage)
                     yield CostLimitExceeded(session_cost=session_cost, max_cost=self._config.max_cost)
@@ -579,6 +614,17 @@ class Agent:
                     ctx_after = AfterToolCallContext(tool_call=call, result=result, agent=self)
                     self._ext_registry.fire_after_tool_call(ctx_after)
                 yield ToolResultEvent(result=result)
+                
+                append_audit_record(
+                    self._config.workspace_root,
+                    "tool.completed",
+                    {
+                        "tool": call.name,
+                        "tool_call_id": result.tool_call_id,
+                        "is_error": result.is_error,
+                    },
+                )
+                
                 self._context.add_message(Message(
                     role="tool",
                     content=result.content,
@@ -650,6 +696,17 @@ class Agent:
         for attempt in range(1, max_attempts + 1):
             try:
                 messages, tools = self._prepare_request_payload()
+                
+                # --- P1: Prompt Caching ---
+                if self._provider.name == "openai" and "claude" in self._config.model.lower():
+                    messages = apply_anthropic_cache_control(
+                        [m.to_dict() for m in messages], 
+                        cache_ttl="5m"
+                    )
+                    # Restore to Message objects
+                    from tau.core.types import Message
+                    messages = [Message.from_dict(m) for m in messages]
+
                 _trace.log_request(messages, tools)
                 raw = self._provider.chat(
                     messages=messages,
