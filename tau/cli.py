@@ -2228,10 +2228,16 @@ def _handle_slash(
         if preset_name not in THEME_PRESETS:
             _print(f"[red]  Unknown preset {preset_name!r}.[/red]  Available: {', '.join(THEME_PRESETS)}")
             return True
-        # Write to ~/.tau/theme.toml so it persists and hot-reload picks it up
+        # Write to ~/.tau/theme.toml so it persists and hot-reload picks it up.
+        # Include concrete color fields so preset reliably overrides any explicit
+        # [theme] keys in ~/.tau/config.toml.
         try:
             THEME_PATH.parent.mkdir(parents=True, exist_ok=True)
-            THEME_PATH.write_text(f'preset = "{preset_name}"\n', encoding="utf-8")
+            colors = THEME_PRESETS[preset_name]
+            lines = [f'preset = "{preset_name}"']
+            for key, value in colors.items():
+                lines.append(f'{key} = "{value}"')
+            THEME_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
             cfg = load_config()
             theme.load(cfg, force=True)
             _print(f"[green]  ✓ Switched to [bold]{preset_name}[/bold] theme.[/green]")
@@ -2386,12 +2392,79 @@ def _repl(
     confirm_result: list[bool] = [False]     # shared slot for the answer
     confirm_answered = threading.Event()     # agent thread blocks on this
 
-    # ANSI escape helpers
+    # ANSI escape helpers (theme-aware).
     _BOLD = "\033[1m"
-    _CYAN = "\033[36m"
-    _MAGENTA = "\033[35m"
     _DIM = "\033[2m"
     _RESET = "\033[0m"
+    _ANSI_FG: dict[str, int] = {
+        "black": 30,
+        "red": 31,
+        "green": 32,
+        "yellow": 33,
+        "blue": 34,
+        "magenta": 35,
+        "cyan": 36,
+        "white": 37,
+        "bright_black": 90,
+        "bright_red": 91,
+        "bright_green": 92,
+        "bright_yellow": 93,
+        "bright_blue": 94,
+        "bright_magenta": 95,
+        "bright_cyan": 96,
+        "bright_white": 97,
+        # Rich aliases often used in presets/config.
+        "dark_red": 31,
+        "dark_green": 32,
+        "dark_orange": 33,
+        "grey50": 90,
+        "gray50": 90,
+        "dim": 37,
+    }
+
+    def _ansi_fg(value: str, *, bold: bool = False, dim: bool = False) -> str:
+        out = ""
+        if bold:
+            out += _BOLD
+        if dim:
+            out += _DIM
+        v = (value or "").strip().lower()
+        if v.startswith("#") and len(v) == 7:
+            try:
+                r = int(v[1:3], 16)
+                g = int(v[3:5], 16)
+                b = int(v[5:7], 16)
+                return out + f"\033[38;2;{r};{g};{b}m"
+            except Exception:
+                return out
+        code = _ANSI_FG.get(v)
+        if code is not None:
+            out += f"\033[{code}m"
+        return out
+
+    def _ptk_fg(value: str, fallback: str) -> str:
+        """Map theme color to prompt_toolkit style token."""
+        v = (value or "").strip().lower()
+        if v.startswith("#") and len(v) == 7:
+            return f"fg:{v}"
+        # prompt_toolkit supports ansi names; normalize common aliases.
+        alias = {
+            "dark_red": "ansired",
+            "dark_green": "ansigreen",
+            "dark_orange": "ansiyellow",
+            "grey50": "ansibrightblack",
+            "gray50": "ansibrightblack",
+        }
+        if v in alias:
+            return f"fg:{alias[v]}"
+        base = {
+            "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+            "bright_black", "bright_red", "bright_green", "bright_yellow",
+            "bright_blue", "bright_magenta", "bright_cyan", "bright_white",
+        }
+        if v in base:
+            return f"fg:ansi{v}"
+        return fallback
 
     loaded_names: list[str] = []
     if ext_registry is not None:
@@ -2400,18 +2473,18 @@ def _repl(
         except Exception:
             loaded_names = []
     loaded_line = (
-        f"{_DIM}Extensions: {', '.join(loaded_names)}{_RESET}\n"
+        f"{_ansi_fg(theme.system_color, dim=True)}Extensions: {', '.join(loaded_names)}{_RESET}\n"
         if loaded_names
-        else f"{_DIM}Extensions: (none){_RESET}\n"
+        else f"{_ansi_fg(theme.system_color, dim=True)}Extensions: (none){_RESET}\n"
     )
 
     header = (
-        f"{_BOLD}{_CYAN}tau v{_tau_version()}{_RESET}"
-        f"  {_MAGENTA}{agent_config.provider}/{agent_config.model}{_RESET}"
-        f"  {_DIM}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
+        f"{_ansi_fg(theme.accent_color, bold=True)}tau v{_tau_version()}{_RESET}"
+        f"  {_ansi_fg(theme.assistant_color)}{agent_config.provider}/{agent_config.model}{_RESET}"
+        f"  {_ansi_fg(theme.system_color, dim=True)}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
         + loaded_line
-        + f"{_DIM}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom  ·  Esc cancel  ·  Ctrl+J new line{_RESET}\n"
-        + f"{_DIM}{'═' * 60}{_RESET}\n"
+        + f"{_ansi_fg(theme.system_color, dim=True)}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom  ·  Esc cancel  ·  Ctrl+J new line{_RESET}\n"
+        + f"{_ansi_fg(theme.system_color, dim=True)}{'═' * 60}{_RESET}\n"
     )
     output_text_parts.append(header)
     _output_total_chars: list[int] = [len(header)]
@@ -2562,7 +2635,7 @@ def _repl(
         thinking = agent._config.thinking_level
         think_str = f" [{thinking}]" if thinking and thinking != "off" else ""
         left_plain = f"  {ws_name}"
-        left_ansi = f"  {_DIM}{ws_name}{_RESET}"
+        left_ansi = f"  {_ansi_fg(theme.system_color, dim=True)}{ws_name}{_RESET}"
         right_plain = f"{model}{think_str}  "
         try:
             width = _shutil.get_terminal_size().columns
@@ -2572,7 +2645,7 @@ def _repl(
         return ANSI(
             f"{left_ansi}"
             f"{' ' * pad}"
-            f"{_CYAN}{model}{_DIM}{think_str}{_RESET}  "
+            f"{_ansi_fg(theme.accent_color)}{model}{_ansi_fg(theme.system_color, dim=True)}{think_str}{_RESET}  "
         )
 
     def _get_footer_line2() -> ANSI:
@@ -2593,7 +2666,7 @@ def _repl(
 
         cost = _footer_tau_config[0].calculate_cost(agent._config.model, _DU())
         cost_str = f"${cost:.4f}" if cost > 0 else "$0.0000"
-        pct_color = "\033[32m" if pct < 70 else "\033[33m" if pct < 90 else "\033[31m"
+        pct_color = _ansi_fg(theme.success_color) if pct < 70 else _ansi_fg(theme.warning_color) if pct < 90 else _ansi_fg(theme.error_color)
         if budget >= 1_000_000:
             budget_str = f"{budget // 1_000_000}M"
         elif budget >= 1_000:
@@ -2601,7 +2674,7 @@ def _repl(
         else:
             budget_str = str(budget)
         return ANSI(
-            f"  {_DIM}{cost_str}"
+            f"  {_ansi_fg(theme.system_color, dim=True)}{cost_str}"
             f"  ↑{in_tok:,}"
             f"  ↓{out_tok:,}"
             f"  {pct_color}{pct}%/{budget_str} ctx{_RESET}"
@@ -2622,21 +2695,19 @@ def _repl(
 
     def _get_prompt_prefix() -> list[tuple[str, str]]:
         if confirm_pending.is_set():
-            return [("bold fg:ansiyellow", "allow? [y/N] ")]
+            return [("bold " + _ptk_fg(theme.warning_color, "fg:ansiyellow"), "allow? [y/N] ")]
         if agent_running.is_set():
             frame = _SPINNER_FRAMES[_spinner_idx[0]]
-            return [("bold fg:ansimagenta", f"{frame} ")]
-        return [("bold fg:ansicyan", "> ")]
+            return [("bold " + _ptk_fg(theme.assistant_color, "fg:ansimagenta"), f"{frame} ")]
+        return [("bold " + _ptk_fg(theme.accent_color, "fg:ansicyan"), "> ")]
 
     # -- agent runner --------------------------------------------------------
-    _YELLOW = "\033[33m"
-
     def _tui_confirm(command: str) -> bool:
         """Confirmation hook for TUI mode — posts the question to the output
         buffer and waits for the user to type y/N in the input field."""
         _append_output(
-            f"\n{_BOLD}{_YELLOW}  ⚠  tau wants to run:{_RESET}"
-            f"\n\n    {_CYAN}{command}{_RESET}\n\n"
+            f"\n{_ansi_fg(theme.warning_color, bold=True)}  ⚠  tau wants to run:{_RESET}"
+            f"\n\n    {_ansi_fg(theme.accent_color)}{command}{_RESET}\n\n"
         )
         confirm_answered.clear()
         confirm_pending.set()
@@ -2653,8 +2724,8 @@ def _repl(
         keeps ownership of terminal input.
         """
         _append_output(
-            f"\n{_BOLD}{_YELLOW}  ? policy approval requested{_RESET}"
-            f"\n\n    {_CYAN}{reason}{_RESET}\n\n"
+            f"\n{_ansi_fg(theme.warning_color, bold=True)}  ? policy approval requested{_RESET}"
+            f"\n\n    {_ansi_fg(theme.accent_color)}{reason}{_RESET}\n\n"
         )
         confirm_answered.clear()
         confirm_pending.set()
@@ -2776,12 +2847,15 @@ def _repl(
         if inlined_files:
             n = len(inlined_files)
             names = ", ".join(Path(f).name for f in inlined_files)
-            _append_output(f"\n{_BOLD}{_CYAN}>{_RESET} {text}\n")
-            _append_output(f"{_DIM}  📎 {n} file{'s' if n > 1 else ''} inlined: {names}{_RESET}\n")
-            _append_output(f"{_DIM}{'─' * 60}{_RESET}\n")
+            _append_output(f"\n{_ansi_fg(theme.accent_color, bold=True)}>{_RESET} {text}\n")
+            _append_output(f"{_ansi_fg(theme.system_color, dim=True)}  📎 {n} file{'s' if n > 1 else ''} inlined: {names}{_RESET}\n")
+            _append_output(f"{_ansi_fg(theme.system_color, dim=True)}{'─' * 60}{_RESET}\n")
             text = expanded
         else:
-            _append_output(f"\n{_BOLD}{_CYAN}>{_RESET} {text}\n" + f"{_DIM}{'─' * 60}{_RESET}\n")
+            _append_output(
+                f"\n{_ansi_fg(theme.accent_color, bold=True)}>{_RESET} {text}\n"
+                + f"{_ansi_fg(theme.system_color, dim=True)}{'─' * 60}{_RESET}\n"
+            )
         threading.Thread(
             target=_run_agent, args=(text,), daemon=True
         ).start()
