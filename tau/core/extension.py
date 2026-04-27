@@ -474,6 +474,18 @@ class ExtensionRegistry:
             self._disabled = set(disabled)
         return self.load_all(registry, context, steering, console_print, agent_config=agent_config)
 
+    def shutdown(self) -> None:
+        """Call on_unload for all loaded extensions and clear runtime registries."""
+        for ext in self._extensions.values():
+            try:
+                ext.on_unload()
+            except Exception:  # noqa: BLE001
+                pass
+        self._extensions.clear()
+        self._slash_index.clear()
+        self._hooks.clear()
+        self._before_turn_hooks.clear()
+
     def handle_slash(self, raw_input: str, ext_context: ExtensionContext) -> bool:
         """
         Try to dispatch a /command to a registered extension.

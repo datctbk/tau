@@ -3034,6 +3034,11 @@ def _repl(
         application.run()
     finally:
         _theme_watcher.stop()
+        if ext_registry is not None:
+            try:
+                ext_registry.shutdown()
+            except Exception:
+                pass
         # Restore global exception hooks after TUI exits.
         sys.excepthook = _prev_sys_excepthook
         if _prev_thread_excepthook is not None:
