@@ -4,8 +4,11 @@ import json
 import logging
 import os
 import re
+import shlex
+import subprocess
 import sys
 import threading
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -749,6 +752,7 @@ _SLASH_HELP = (
     "  /export [file]  export session as JSON (or .md for markdown)\n"
     "  /share [--json]  upload session to paste.rs and print the URL\n"
     "  /import <file>  import a previously-exported JSON session file\n"
+    "  /voice [secs|path]  record+transcribe voice (or transcribe audio file) and send\n"
 
     "  /reload        hot-reload config, extensions, skills, context files\n"
     "  /prompt <name> [k=v …]  expand a prompt template and send it\n"
@@ -758,6 +762,87 @@ _SLASH_HELP = (
     "  /help          show this message\n"
     "  exit / Ctrl-D  quit"
 )
+
+
+def _resolve_stt_command() -> str:
+    """Resolve STT command from env vars."""
+    return (
+        os.environ.get("TAU_STT_COMMAND", "").strip()
+        or os.environ.get("TAU_GATEWAY_STT_COMMAND", "").strip()
+    )
+
+
+def _run_stt_command(command_template: str, audio_path: str, timeout_s: int = 180) -> tuple[str | None, str | None]:
+    """Run STT command and return (transcript, error)."""
+    if "{file}" in command_template:
+        cmd = command_template.replace("{file}", audio_path)
+    else:
+        cmd = f"{command_template} {shlex.quote(audio_path)}"
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except Exception as exc:
+        return None, f"failed to execute STT command: {exc}"
+    if result.returncode != 0:
+        err = (result.stderr or "").strip() or f"exit code {result.returncode}"
+        return None, f"STT command failed: {err}"
+    text = (result.stdout or "").strip()
+    if not text:
+        return None, "STT command returned empty transcript."
+    return text, None
+
+
+def _record_audio_file(seconds: int) -> tuple[str | None, str | None]:
+    """Record microphone audio to a temp file and return (path, error)."""
+    tau_home = ensure_tau_home()
+    voice_dir = tau_home / "voice"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    fd, out_path = tempfile.mkstemp(prefix="tau-voice-", suffix=".wav", dir=str(voice_dir))
+    os.close(fd)
+    rec_cmd = os.environ.get("TAU_STT_RECORD_COMMAND", "").strip()
+    if not rec_cmd:
+        try:
+            os.unlink(out_path)
+        except Exception:
+            pass
+        return None, (
+            "TAU_STT_RECORD_COMMAND is not set. "
+            "Example (macOS + sox): export TAU_STT_RECORD_COMMAND='rec -q {file} trim 0 {seconds}'"
+        )
+    cmd = rec_cmd.replace("{file}", out_path).replace("{seconds}", str(max(1, seconds)))
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=max(10, seconds + 10),
+        )
+    except Exception as exc:
+        try:
+            os.unlink(out_path)
+        except Exception:
+            pass
+        return None, f"record command failed: {exc}"
+    if result.returncode != 0:
+        err = (result.stderr or "").strip() or f"exit code {result.returncode}"
+        try:
+            os.unlink(out_path)
+        except Exception:
+            pass
+        return None, f"record command failed: {err}"
+    if not Path(out_path).exists() or Path(out_path).stat().st_size == 0:
+        try:
+            os.unlink(out_path)
+        except Exception:
+            pass
+        return None, "record command produced no audio file."
+    return out_path, None
 
 # ---------------------------------------------------------------------------
 # /tree — in-place session branch navigator
@@ -2101,6 +2186,65 @@ def _handle_slash(
             _print(f"  [red]✗[/red] image not found: {img_path}")
         return True
 
+    if keyword == "/voice":
+        stt_cmd = _resolve_stt_command()
+        if not stt_cmd:
+            _print(
+                "[yellow]  STT is not configured.[/yellow]\n"
+                "[dim]Set TAU_STT_COMMAND (or TAU_GATEWAY_STT_COMMAND), for example:[/dim]\n"
+                "[dim]  export TAU_STT_COMMAND='/Users/<you>/stt/run_stt.sh'[/dim]"
+            )
+            return True
+
+        # /voice <path> : transcribe an existing file
+        audio_path: str | None = None
+        if arg:
+            candidate = Path(arg).expanduser()
+            if candidate.exists():
+                audio_path = str(candidate.resolve())
+            else:
+                # /voice <seconds>
+                try:
+                    seconds = int(arg)
+                except Exception:
+                    _print("[dim]  Usage: /voice [seconds|/path/to/audio][/dim]")
+                    return True
+                _print(f"[dim]  Recording {seconds}s...[/dim]")
+                recorded, rec_err = _record_audio_file(seconds)
+                if rec_err:
+                    _print(f"[red]  ✗ {rec_err}[/red]")
+                    return True
+                audio_path = recorded
+        else:
+            seconds = int(os.environ.get("TAU_STT_RECORD_SECONDS", "8") or "8")
+            _print(f"[dim]  Recording {seconds}s...[/dim]")
+            recorded, rec_err = _record_audio_file(seconds)
+            if rec_err:
+                _print(f"[red]  ✗ {rec_err}[/red]")
+                return True
+            audio_path = recorded
+
+        _print("[dim]  Transcribing...[/dim]")
+        transcript, stt_err = _run_stt_command(stt_cmd, audio_path or "")
+        try:
+            if audio_path:
+                p = Path(audio_path)
+                if p.name.startswith("tau-voice-") and p.parent.name == "voice":
+                    p.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        if stt_err:
+            _print(f"[red]  ✗ {stt_err}[/red]")
+            return True
+        if not transcript:
+            _print("[red]  ✗ Empty transcript.[/red]")
+            return True
+
+        preview = transcript.replace("\n", " ")
+        _print(f"[green]  ✓ Voice transcript:[/green] [dim]{preview[:120]}[/dim]")
+        return transcript
+
     if keyword == "/tokens":
         if agent is not None:
             used = agent._context.token_count()
@@ -2483,7 +2627,7 @@ def _repl(
         f"  {_ansi_fg(theme.assistant_color)}{agent_config.provider}/{agent_config.model}{_RESET}"
         f"  {_ansi_fg(theme.system_color, dim=True)}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
         + loaded_line
-        + f"{_ansi_fg(theme.system_color, dim=True)}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom  ·  Esc cancel  ·  Ctrl+J new line{_RESET}\n"
+        + f"{_ansi_fg(theme.system_color, dim=True)}Shift+↑↓ scroll  ·  PgUp/PgDn page  ·  End jump to bottom  ·  Esc cancel  ·  Ctrl+J new line  ·  Ctrl+R voice{_RESET}\n"
         + f"{_ansi_fg(theme.system_color, dim=True)}{'═' * 60}{_RESET}\n"
     )
     output_text_parts.append(header)
@@ -2948,6 +3092,14 @@ def _repl(
             data = event.app.clipboard.get_data()
             if data.text:
                 input_buffer.insert_text(data.text)
+
+    @kb.add("c-r")
+    def _voice_input(event: object) -> None:
+        """Ctrl-R: record + transcribe voice and send as next prompt."""
+        if agent_running.is_set() or confirm_pending.is_set():
+            return
+        input_buffer.text = "/voice"
+        _on_enter(event)
 
     @kb.add("c-d")
     def _ctrl_d(event: object) -> None:
