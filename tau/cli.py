@@ -1,6 +1,7 @@
 """tau CLI — entry point, REPL, and single-shot mode."""
 from __future__ import annotations
 import json
+import importlib.util
 import logging
 import os
 import re
@@ -752,7 +753,9 @@ _SLASH_HELP = (
     "  /export [file]  export session as JSON (or .md for markdown)\n"
     "  /share [--json]  upload session to paste.rs and print the URL\n"
     "  /import <file>  import a previously-exported JSON session file\n"
-    "  /voice [secs|path]  record+transcribe voice (or transcribe audio file) and send\n"
+    "  /voice [secs|path]  record+transcribe voice (or transcribe audio file)\n"
+    "  /voice-retry   retry transcription on the last recorded/uploaded voice file\n"
+    "  /doctor        show runtime diagnostics (paths, env, gateway, STT, deps)\n"
 
     "  /reload        hot-reload config, extensions, skills, context files\n"
     "  /prompt <name> [k=v …]  expand a prompt template and send it\n"
@@ -799,7 +802,8 @@ def _run_stt_command(command_template: str, audio_path: str, timeout_s: int = 18
 
 def _record_audio_file(seconds: int) -> tuple[str | None, str | None]:
     """Record microphone audio to a temp file and return (path, error)."""
-    tau_home = ensure_tau_home()
+    ensure_tau_home()
+    tau_home = Path.home() / ".tau"
     voice_dir = tau_home / "voice"
     voice_dir.mkdir(parents=True, exist_ok=True)
     fd, out_path = tempfile.mkstemp(prefix="tau-voice-", suffix=".wav", dir=str(voice_dir))
@@ -843,6 +847,84 @@ def _record_audio_file(seconds: int) -> tuple[str | None, str | None]:
             pass
         return None, "record command produced no audio file."
     return out_path, None
+
+
+def _doctor_report(agent: "Agent | None" = None) -> str:
+    """Build a concise runtime diagnostics report."""
+    ensure_tau_home()
+    tau_home = Path.home() / ".tau"
+    lines: list[str] = ["[bold cyan]Runtime Doctor[/bold cyan]", ""]
+    lines.append(f"[bold]tau[/bold] { _tau_version() }")
+    lines.append(f"[bold]python[/bold] {sys.executable}")
+    lines.append(f"[bold]cwd[/bold] {Path.cwd()}")
+    lines.append(f"[bold]tau_home[/bold] {tau_home}")
+
+    if agent is not None:
+        lines.append(f"[bold]provider/model[/bold] {agent._config.provider}/{agent._config.model}")
+        lines.append(f"[bold]workspace[/bold] {Path(agent._config.workspace_root).resolve()}")
+    else:
+        lines.append("[bold]provider/model[/bold] (no active agent)")
+
+    lines.append("")
+    lines.append("[bold]gateway[/bold]")
+    pid_file = tau_home / "gateway" / "gateway.pid"
+    log_file = tau_home / "gateway" / "gateway.log"
+    pid: int | None = None
+    if pid_file.exists():
+        raw = pid_file.read_text(encoding="utf-8").strip()
+        if raw.startswith("pid="):
+            raw = raw.split("=", 1)[1].strip()
+        try:
+            pid = int(raw)
+        except Exception:
+            pid = None
+    lines.append(f"  pid_file: {pid_file} ({'present' if pid_file.exists() else 'missing'})")
+    lines.append(f"  log_file: {log_file} ({'present' if log_file.exists() else 'missing'})")
+
+    if pid:
+        try:
+            out = subprocess.check_output(
+                ["ps", "-o", "command=", "-p", str(pid)],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            lines.append(f"  daemon: running (pid={pid})")
+            lines.append(f"  command: {out or '(unknown)'}")
+        except Exception:
+            lines.append(f"  daemon: not running (stale pid={pid})")
+    else:
+        lines.append("  daemon: not tracked")
+
+    lines.append(f"  TAU_GATEWAY_ENTRYPOINT: {os.environ.get('TAU_GATEWAY_ENTRYPOINT', '(unset)')}")
+
+    lines.append("")
+    lines.append("[bold]stt[/bold]")
+    stt_cmd = _resolve_stt_command()
+    lines.append(f"  command: {stt_cmd or '(unset)'}")
+    lines.append(f"  record_command: {os.environ.get('TAU_STT_RECORD_COMMAND', '(unset)')}")
+    lines.append(f"  record_seconds: {os.environ.get('TAU_STT_RECORD_SECONDS', '(default: 8)')}")
+
+    lines.append("")
+    lines.append("[bold]deps[/bold]")
+    dep_names = [
+        ("python-telegram-bot", "telegram"),
+        ("openai", "openai"),
+        ("faster-whisper", "faster_whisper"),
+    ]
+    for label, mod in dep_names:
+        ok = importlib.util.find_spec(mod) is not None
+        lines.append(f"  {'✓' if ok else '✗'} {label}")
+
+    lines.append("")
+    lines.append("[bold]profiles[/bold]")
+    profiles_dir = tau_home / "profiles"
+    dev_env = profiles_dir / "dev.env"
+    prod_env = profiles_dir / "prod.env"
+    lines.append(f"  dev:  {dev_env} ({'present' if dev_env.exists() else 'missing'})")
+    lines.append(f"  prod: {prod_env} ({'present' if prod_env.exists() else 'missing'})")
+    lines.append("  activate: source ~/.tau/profiles/dev.env  (or prod.env)")
+
+    return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
 # /tree — in-place session branch navigator
@@ -1736,6 +1818,7 @@ def _handle_slash(
     agent: "Agent | None" = None,
     output_fn: Callable[[str], None] | None = None,
     staged_images: list[str] | None = None,
+    voice_state: dict[str, Any] | None = None,
     reset_fn: "Callable[[], None] | None" = None,
     tools_filter: str | None = None,
 ) -> bool:
@@ -2226,13 +2309,6 @@ def _handle_slash(
 
         _print("[dim]  Transcribing...[/dim]")
         transcript, stt_err = _run_stt_command(stt_cmd, audio_path or "")
-        try:
-            if audio_path:
-                p = Path(audio_path)
-                if p.name.startswith("tau-voice-") and p.parent.name == "voice":
-                    p.unlink(missing_ok=True)
-        except Exception:
-            pass
 
         if stt_err:
             _print(f"[red]  ✗ {stt_err}[/red]")
@@ -2241,9 +2317,46 @@ def _handle_slash(
             _print("[red]  ✗ Empty transcript.[/red]")
             return True
 
+        if voice_state is not None and audio_path:
+            voice_state["last_audio_path"] = audio_path
+
         preview = transcript.replace("\n", " ")
-        _print(f"[green]  ✓ Voice transcript:[/green] [dim]{preview[:120]}[/dim]")
-        return transcript
+        _print(
+            f"[green]  ✓ Voice transcript ready:[/green] [dim]{preview[:120]}[/dim]\n"
+            "[dim]Edit the drafted text, then press Enter to send.[/dim]"
+        )
+        return ("prefill", transcript)
+
+    if keyword == "/voice-retry":
+        stt_cmd = _resolve_stt_command()
+        if not stt_cmd:
+            _print("[yellow]  STT is not configured (TAU_STT_COMMAND/TAU_GATEWAY_STT_COMMAND).[/yellow]")
+            return True
+        last_audio = (voice_state or {}).get("last_audio_path") if voice_state else None
+        if not last_audio:
+            _print("[dim]  No previous voice file found. Use /voice first.[/dim]")
+            return True
+        if not Path(last_audio).exists():
+            _print(f"[red]  ✗ Last voice file no longer exists:[/red] {last_audio}")
+            return True
+        _print("[dim]  Retrying transcription...[/dim]")
+        transcript, stt_err = _run_stt_command(stt_cmd, str(last_audio))
+        if stt_err:
+            _print(f"[red]  ✗ {stt_err}[/red]")
+            return True
+        if not transcript:
+            _print("[red]  ✗ Empty transcript.[/red]")
+            return True
+        preview = transcript.replace("\n", " ")
+        _print(
+            f"[green]  ✓ Voice transcript ready:[/green] [dim]{preview[:120]}[/dim]\n"
+            "[dim]Edit the drafted text, then press Enter to send.[/dim]"
+        )
+        return ("prefill", transcript)
+
+    if keyword == "/doctor":
+        _print(_doctor_report(agent))
+        return True
 
     if keyword == "/tokens":
         if agent is not None:
@@ -2633,6 +2746,7 @@ def _repl(
     output_text_parts.append(header)
     _output_total_chars: list[int] = [len(header)]
     _output_total_lines: list[int] = [header.count("\n")]
+    _voice_state: dict[str, Any] = {}
 
     # -- buffers -------------------------------------------------------------
     _completer = _TauCompleter()
@@ -2958,10 +3072,13 @@ def _repl(
                         pass
             handled = _handle_slash(
                 text, steering, ext_registry, ext_context, agent=agent, output_fn=_append_output,
-                staged_images=_staged_images, reset_fn=_tree_reset_fn,
+                staged_images=_staged_images, voice_state=_voice_state, reset_fn=_tree_reset_fn,
                 tools_filter=tools_filter,
             )
             if handled is True:
+                return
+            if isinstance(handled, tuple) and len(handled) == 2 and handled[0] == "prefill":
+                input_buffer.text = handled[1]
                 return
             # /prompt returns the expanded template text as a string
             if isinstance(handled, str):
@@ -3003,6 +3120,84 @@ def _repl(
         threading.Thread(
             target=_run_agent, args=(text,), daemon=True
         ).start()
+
+    # -- push-to-talk (toggle) state ----------------------------------------
+    _ptt_proc: list[subprocess.Popen[str] | None] = [None]
+    _ptt_file: list[str | None] = [None]
+    _ptt_started_at: list[float | None] = [None]
+
+    def _ptt_start() -> None:
+        if _ptt_proc[0] is not None:
+            return
+        hold_cmd = os.environ.get("TAU_STT_RECORD_HOLD_COMMAND", "").strip()
+        if not hold_cmd:
+            _append_output(
+                "[dim]Set TAU_STT_RECORD_HOLD_COMMAND for push-to-talk.[/dim]\n"
+                "[dim]Example: export TAU_STT_RECORD_HOLD_COMMAND='rec -q {file}'[/dim]\n"
+            )
+            return
+        tau_home = Path.home() / ".tau"
+        voice_dir = tau_home / "voice"
+        voice_dir.mkdir(parents=True, exist_ok=True)
+        fd, out_path = tempfile.mkstemp(prefix="tau-voice-", suffix=".wav", dir=str(voice_dir))
+        os.close(fd)
+        cmd = hold_cmd.replace("{file}", out_path)
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except Exception as exc:
+            Path(out_path).unlink(missing_ok=True)
+            _append_output(f"[red]✗ failed to start recording: {exc}[/red]\n")
+            return
+        _ptt_proc[0] = proc
+        _ptt_file[0] = out_path
+        _ptt_started_at[0] = time.time()
+        _append_output("[dim]● recording... press Ctrl+R again to stop[/dim]\n")
+
+    def _ptt_stop_and_transcribe() -> None:
+        proc = _ptt_proc[0]
+        audio_path = _ptt_file[0]
+        started = _ptt_started_at[0]
+        _ptt_proc[0] = None
+        _ptt_file[0] = None
+        _ptt_started_at[0] = None
+        if proc is None or not audio_path:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        dur = max(0.0, time.time() - (started or time.time()))
+        if not Path(audio_path).exists() or Path(audio_path).stat().st_size == 0:
+            _append_output("[red]✗ recording failed (empty file).[/red]\n")
+            return
+        _voice_state["last_audio_path"] = audio_path
+        stt_cmd = _resolve_stt_command()
+        if not stt_cmd:
+            _append_output(
+                "[yellow]STT not configured.[/yellow] "
+                "[dim]Set TAU_STT_COMMAND (or TAU_GATEWAY_STT_COMMAND), then run /voice-retry.[/dim]\n"
+            )
+            return
+        _append_output(f"[dim]recorded {dur:.1f}s, transcribing...[/dim]\n")
+        transcript, stt_err = _run_stt_command(stt_cmd, audio_path)
+        if stt_err:
+            _append_output(f"[red]✗ {stt_err}[/red]\n")
+            return
+        if not transcript:
+            _append_output("[red]✗ Empty transcript.[/red]\n")
+            return
+        input_buffer.text = transcript
+        _append_output("[green]✓ transcript drafted. Edit then press Enter.[/green]\n")
 
     # -- key bindings --------------------------------------------------------
     kb = KeyBindings()
@@ -3095,11 +3290,13 @@ def _repl(
 
     @kb.add("c-r")
     def _voice_input(event: object) -> None:
-        """Ctrl-R: record + transcribe voice and send as next prompt."""
+        """Ctrl-R: push-to-talk toggle (start/stop recording, then transcribe)."""
         if agent_running.is_set() or confirm_pending.is_set():
             return
-        input_buffer.text = "/voice"
-        _on_enter(event)
+        if _ptt_proc[0] is None:
+            _ptt_start()
+        else:
+            threading.Thread(target=_ptt_stop_and_transcribe, daemon=True).start()
 
     @kb.add("c-d")
     def _ctrl_d(event: object) -> None:
@@ -4065,3 +4262,87 @@ def config_set(key: str, value: str) -> None:
         new_lines.append(f'{key} = {val_str}')
     CONFIG_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
     console.print(f"[green]Set [bold]{key}[/bold] = {value}[/green]")
+
+
+def _installed_gateway_entrypoint() -> Path | None:
+    """Best-effort resolve installed tau_gateway entrypoint."""
+    p = Path.home() / ".tau" / "packages" / "git" / "tau_gateway" / "__main__.py"
+    return p if p.is_file() else None
+
+
+@main.command("profile")
+@click.argument("mode", type=click.Choice(["dev", "prod", "show"], case_sensitive=False))
+@click.option(
+    "--gateway-repo",
+    default=".",
+    show_default=True,
+    help="Path to local tau-gateway repo root (used for dev profile).",
+)
+def profile_cmd(mode: str, gateway_repo: str) -> None:
+    """Create/show stable runtime profiles to avoid local-vs-installed ambiguity."""
+    mode = mode.lower()
+    ensure_tau_home()
+    tau_home = Path.home() / ".tau"
+    profiles_dir = tau_home / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    dev_env = profiles_dir / "dev.env"
+    prod_env = profiles_dir / "prod.env"
+
+    if mode == "show":
+        lines = [
+            "[bold cyan]tau profiles[/bold cyan]",
+            "",
+            f"dev:  {dev_env} ({'present' if dev_env.exists() else 'missing'})",
+            f"prod: {prod_env} ({'present' if prod_env.exists() else 'missing'})",
+            "",
+            "activate:",
+            "  source ~/.tau/profiles/dev.env",
+            "  source ~/.tau/profiles/prod.env",
+        ]
+        console.print("\n".join(lines))
+        return
+
+    repo_root = Path(gateway_repo).expanduser().resolve()
+    local_entry = (repo_root / "tau-gateway" / "__main__.py").resolve()
+    installed_entry = _installed_gateway_entrypoint()
+
+    if mode == "dev":
+        if not local_entry.is_file():
+            err_console.print(
+                f"[red]Error:[/red] local gateway entrypoint not found at {local_entry}\n"
+                "[dim]Pass --gateway-repo <path> that contains tau-gateway/__main__.py[/dim]"
+            )
+            sys.exit(1)
+        content = (
+            "# tau dev profile\n"
+            "export TAU_PROFILE=dev\n"
+            f"export TAU_GATEWAY_ENTRYPOINT={shlex.quote(str(local_entry))}\n"
+            "unset TAU_GATEWAY_ALLOW_CWD_ENTRYPOINT\n"
+        )
+        dev_env.write_text(content, encoding="utf-8")
+        console.print(
+            f"[green]Wrote dev profile:[/green] {dev_env}\n"
+            f"[dim]Gateway entrypoint -> {local_entry}[/dim]\n"
+            "[dim]Activate: source ~/.tau/profiles/dev.env[/dim]"
+        )
+        return
+
+    # mode == "prod"
+    if installed_entry is None:
+        err_console.print(
+            "[red]Error:[/red] installed tau_gateway entrypoint not found.\n"
+            "[dim]Install/update tau-gateway package first, then run: tau profile prod[/dim]"
+        )
+        sys.exit(1)
+    content = (
+        "# tau prod profile\n"
+        "export TAU_PROFILE=prod\n"
+        f"export TAU_GATEWAY_ENTRYPOINT={shlex.quote(str(installed_entry))}\n"
+        "unset TAU_GATEWAY_ALLOW_CWD_ENTRYPOINT\n"
+    )
+    prod_env.write_text(content, encoding="utf-8")
+    console.print(
+        f"[green]Wrote prod profile:[/green] {prod_env}\n"
+        f"[dim]Gateway entrypoint -> {installed_entry}[/dim]\n"
+        "[dim]Activate: source ~/.tau/profiles/prod.env[/dim]"
+    )

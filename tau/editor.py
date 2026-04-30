@@ -131,7 +131,7 @@ def complete_slash_commands(
 BUILTIN_SLASH_COMMANDS = [
     "help", "queue", "steer", "clear", "compact",
     "model", "think", "tokens", "tree", "fork", "bookmark", "image",
-    "voice", "copy", "export", "share", "import", "reload", "prompt", "prompts",
+    "voice", "voice-retry", "doctor", "copy", "export", "share", "import", "reload", "prompt", "prompts",
     "theme", "themes",
 ]
 
