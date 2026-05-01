@@ -204,6 +204,8 @@ class AgentConfig:
     max_cost: float = 0.0  # USD ceiling; 0 = unlimited
     # --- memory retrieval ---
     memory_topk: int = 0  # 0 = disabled; >0 enables top-k dynamic memory retrieval
+    # --- optional code index delta context ---
+    code_index_enabled: bool = False
     # --- policy scaffold ---
     policy_enabled: bool = True
     policy_profile: Literal["strict", "balanced", "dev"] = "balanced"

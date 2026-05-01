@@ -50,6 +50,7 @@ def make_agent_config(
     persistent_shell: bool = False,
     max_cost: float | None = None,
     topk: int = 0,
+    code_index: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     minimal: bool = False,
@@ -82,6 +83,7 @@ def make_agent_config(
         parallel_tools_max_workers=tau_config.parallel_tools_max_workers,
         max_cost=max_cost if max_cost is not None else tau_config.max_cost,
         memory_topk=max(0, topk),
+        code_index_enabled=bool(code_index),
         policy_enabled=tau_config.policy_enabled,
         policy_profile=tau_config.policy_profile,
         prompt_budget_enabled=bool(tau_config.prompt_budget_enabled),
@@ -105,6 +107,7 @@ def _load_prompt_layers(
     workspace_root: str,
     ext_registry: ExtensionRegistry,
     minimal_mode: bool,
+    code_index_enabled: bool,
 ) -> None:
     layers: list[PromptLayer] = []
     if not minimal_mode:
@@ -113,6 +116,48 @@ def _load_prompt_layers(
         context_text = load_context_files(workspace_root)
         if context_text:
             layers.append(PromptLayer(name="workspace:context-files", content=context_text, priority=55))
+        if code_index_enabled:
+            try:
+                from tau.core.code_index import (
+                    refresh_code_index,
+                )
+                stats = refresh_code_index(workspace_root)
+                changes = stats["changes"]
+
+                changed = changes.changed
+                deleted = changes.deleted
+                preview_n = 30
+                lines = [
+                    "## Code Index Delta (Merkle)",
+                    f"- added: {len(changes.added)}",
+                    f"- modified: {len(changes.modified)}",
+                    f"- deleted: {len(deleted)}",
+                    f"- unchanged: {changes.unchanged_count}",
+                    f"- files indexed: {int(stats.get('file_count', 0))}",
+                    f"- scan duration: {int(stats.get('duration_ms', 0))}ms",
+                ]
+                if changed:
+                    lines.append("- changed paths:")
+                    for p in changed[:preview_n]:
+                        lines.append(f"  - {p}")
+                    if len(changed) > preview_n:
+                        lines.append(f"  - ... and {len(changed) - preview_n} more")
+                if deleted:
+                    lines.append("- deleted paths:")
+                    for p in deleted[: min(10, len(deleted))]:
+                        lines.append(f"  - {p}")
+                lines.append(
+                    "Use this delta to prioritize analysis on changed files before broad repo scans."
+                )
+                layers.append(
+                    PromptLayer(
+                        name="workspace:code-index-delta",
+                        content="\n".join(lines),
+                        priority=57,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Code index delta generation failed: %s", exc)
     layers.extend(ext_registry.prompt_layers())
     apply_prompt_layers(context, layers)
 
@@ -211,6 +256,7 @@ def build_agent(
         workspace_root=agent_config.workspace_root,
         ext_registry=ext_registry,
         minimal_mode=agent_config.minimal_mode,
+        code_index_enabled=bool(agent_config.code_index_enabled),
     )
     if print_fn:
         if loaded_exts:

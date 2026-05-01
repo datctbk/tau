@@ -237,6 +237,7 @@ _AGENT_OPTIONS = [
         ),
     ),
     click.option("--topk", type=int, default=0, show_default=True, help="Top-k relevant memory entries to inject per turn (0 disables)."),
+    click.option("--code-index/--no-code-index", "code_index", default=False, help="Inject Merkle code-index delta (changed files) into prompt context."),
     click.option("--minimal", is_flag=True, default=False, help="Run with minimal core profile (disable optional capabilities/extensions)."),
     click.option(
         "--dynamic-prompt-builder/--no-dynamic-prompt-builder",
@@ -302,6 +303,7 @@ def _make_agent_config(
     persistent_shell: bool = False,
     max_cost: float | None = None,
     topk: int = 0,
+    code_index: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     minimal: bool = False,
@@ -317,6 +319,7 @@ def _make_agent_config(
         persistent_shell=persistent_shell,
         max_cost=max_cost,
         topk=topk,
+        code_index=code_index,
         dynamic_prompt_builder=dynamic_prompt_builder,
         prompt_budget=prompt_budget,
         minimal=minimal,
@@ -756,6 +759,8 @@ _SLASH_HELP = (
     "  /voice [secs|path]  record+transcribe voice (or transcribe audio file)\n"
     "  /voice-retry   retry transcription on the last recorded/uploaded voice file\n"
     "  /doctor        show runtime diagnostics (paths, env, gateway, STT, deps)\n"
+    "  /code-index-status  show Merkle code-index delta for this workspace\n"
+    "  /code-index-refresh force rebuild index manifest and persist stats now\n"
 
     "  /reload        hot-reload config, extensions, skills, context files\n"
     "  /prompt <name> [k=v …]  expand a prompt template and send it\n"
@@ -2358,6 +2363,76 @@ def _handle_slash(
         _print(_doctor_report(agent))
         return True
 
+    if keyword == "/code-index-status":
+        if agent is None:
+            _print("[dim]  /code-index-status requires an active session.[/dim]")
+            return True
+        try:
+            from tau.core.code_index import (
+                default_manifest_path,
+                detect_workspace_changes,
+                load_index_stats,
+            )
+
+            workspace = agent._config.workspace_root
+            changes, new_manifest, old_manifest = detect_workspace_changes(workspace)
+            root_hash = str(new_manifest.get("root_hash", ""))[:16]
+            mpath = default_manifest_path(workspace)
+            idx_stats = load_index_stats(workspace) or {}
+            lines = [
+                "[bold cyan]Code Index Status[/bold cyan]",
+                f"[dim]manifest:[/dim] {mpath}",
+                f"[dim]root hash:[/dim] {root_hash}",
+                f"[dim]added:[/dim] {len(changes.added)}  "
+                f"[dim]modified:[/dim] {len(changes.modified)}  "
+                f"[dim]deleted:[/dim] {len(changes.deleted)}  "
+                f"[dim]unchanged:[/dim] {changes.unchanged_count}",
+            ]
+            if idx_stats:
+                lines.append(
+                    f"[dim]last scan:[/dim] {idx_stats.get('duration_ms', 0)}ms  "
+                    f"[dim]files indexed:[/dim] {idx_stats.get('file_count', 0)}  "
+                    f"[dim]last changed:[/dim] {idx_stats.get('changed_count', 0)}"
+                )
+            preview = changes.changed[:20]
+            if preview:
+                lines.append("")
+                lines.append("[bold]Changed Files[/bold]")
+                for p in preview:
+                    lines.append(f"  - {p}")
+                if len(changes.changed) > len(preview):
+                    lines.append(f"  [dim]... and {len(changes.changed) - len(preview)} more[/dim]")
+            if old_manifest is None:
+                lines.append("")
+                lines.append("[dim]No previous manifest found yet. Run with --code-index to persist baseline.[/dim]")
+            _print("\n".join(lines))
+        except Exception as exc:
+            _print(f"[red]  ✗ /code-index-status failed: {exc}[/red]")
+        return True
+
+    if keyword == "/code-index-refresh":
+        if agent is None:
+            _print("[dim]  /code-index-refresh requires an active session.[/dim]")
+            return True
+        try:
+            from tau.core.code_index import refresh_code_index
+
+            workspace = agent._config.workspace_root
+            stats = refresh_code_index(workspace)
+            changes = stats["changes"]
+            lines = [
+                "[bold cyan]Code Index Refreshed[/bold cyan]",
+                f"[dim]duration:[/dim] {stats.get('duration_ms', 0)}ms",
+                f"[dim]files indexed:[/dim] {stats.get('file_count', 0)}",
+                f"[dim]added:[/dim] {len(changes.added)}  "
+                f"[dim]modified:[/dim] {len(changes.modified)}  "
+                f"[dim]deleted:[/dim] {len(changes.deleted)}",
+            ]
+            _print("\n".join(lines))
+        except Exception as exc:
+            _print(f"[red]  ✗ /code-index-refresh failed: {exc}[/red]")
+        return True
+
     if keyword == "/tokens":
         if agent is not None:
             used = agent._context.token_count()
@@ -3437,6 +3512,7 @@ def run_cmd(
     trace_log: str | None = None,
     tools_filter: str | None = None,
     topk: int = 0,
+    code_index: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
@@ -3510,6 +3586,7 @@ def run_cmd(
         persistent_shell=persistent_shell,
         max_cost=max_cost,
         topk=topk,
+        code_index=code_index,
         dynamic_prompt_builder=dynamic_prompt_builder,
         minimal=minimal,
         prompt_budget=prompt_budget,
@@ -3683,6 +3760,7 @@ def sessions_fork(
     template_name: str | None, var: tuple[str, ...],
     max_cost: float | None, no_session: bool,
     topk: int = 0,
+    code_index: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
@@ -3717,6 +3795,7 @@ def sessions_fork(
             no_parallel=no_parallel,
             max_cost=max_cost,
             topk=topk,
+            code_index=code_index,
             dynamic_prompt_builder=dynamic_prompt_builder,
             minimal=minimal,
             prompt_budget=prompt_budget,
@@ -3794,6 +3873,7 @@ def sessions_import(
     no_session: bool,
     trace_log: str | None,
     topk: int = 0,
+    code_index: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
@@ -3841,6 +3921,7 @@ def sessions_import(
             persistent_shell=persistent_shell,
             max_cost=max_cost,
             topk=topk,
+            code_index=code_index,
             dynamic_prompt_builder=dynamic_prompt_builder,
             minimal=minimal,
             prompt_budget=prompt_budget,
