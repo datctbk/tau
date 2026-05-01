@@ -18,3 +18,4 @@ tau/extensions/__pycache__/pretty_json.cpython-310.pyc
 tau/extensions/__pycache__/word_count.cpython-310.pyc
 tau/extensions/__pycache__/task_planner.cpython-311.pyc
 tau/extensions/__pycache__/__init__.cpython-311.pyc
+tau/extensions/__pycache__/mcp_resources.cpython-311.pyc

@@ -292,6 +292,10 @@ def build_agent(
                             tau_config.openai.base_url = cred.base_url
                     elif tau_config.provider == "google":
                         tau_config.google.api_key = cred.api_key
+                    elif tau_config.provider == "anthropic":
+                        tau_config.anthropic.api_key = cred.api_key
+                        if cred.base_url:
+                            tau_config.anthropic.base_url = cred.base_url
                 logger.debug("Credential pool selected key for %s", tau_config.provider)
             except Exception as e:
                 logger.warning("Failed to load credential pool: %s", e)

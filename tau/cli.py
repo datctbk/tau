@@ -207,7 +207,7 @@ def _setup_logging(verbose: bool) -> None:
 # Shared options
 # ---------------------------------------------------------------------------
 _AGENT_OPTIONS = [
-    click.option("--provider", "-p", default=None, help="LLM provider (openai, google, ollama)."),
+    click.option("--provider", "-p", default=None, help="LLM provider (openai, google, anthropic, ollama)."),
     click.option("--model", "-m", default=None, help="Model name."),
     click.option("--think", "-t", default=None, type=click.Choice(["off", "minimal", "low", "medium", "high", "xhigh"]), help="Reasoning/thinking effort level."),
     click.option("--image", "-i", multiple=True, help="Attach image file(s) to the first prompt."),
