@@ -1,6 +1,43 @@
 # tau — Design Document
 > A minimal, extensible CLI coding agent with multi-provider LLM support and tool use.
 
+> Note (May 2026): this document contains historical sections from earlier milestones.
+> See **Section 0: Current Architecture Snapshot** for the up-to-date shipped design.
+
+---
+
+## 0. Current Architecture Snapshot (May 2026)
+
+### 0.1 Core Principles (unchanged)
+- Minimal core runtime
+- Extension-first capability growth
+- Provider/tool abstractions with explicit policy boundaries
+
+### 0.2 Current Provider Set
+- OpenAI
+- Anthropic
+- Google Gemini
+- Ollama
+- MLX
+- Unsloth
+
+### 0.3 Core Additions Since Initial Draft
+- Built-in task lifecycle extension (`task_create`, `task_update`, `task_list`) + plan mode
+- Merkle code index module (`tau/core/code_index.py`) with:
+  - change detection
+  - persisted manifest/stats under `.tau/index/`
+  - `/code-index-status` and `/code-index-refresh`
+- MCP minimal built-in extension (`mcp_resources`) with:
+  - `mcp_list_resources`, `mcp_read_resource`
+  - `mcp_list_tools`, `mcp_call_tool`
+  - slash commands `/mcp-resources`, `/mcp-tools`
+- Prompt path integration for optional code-index context injection
+
+### 0.4 Design Positioning
+- Keep high-churn capabilities in extensions.
+- Promote features into core only when they become always-on infrastructure
+  (e.g., provider adapters, session DB, policy/runtime guardrails).
+
 ---
 
 ## 1. Goals & Philosophy
@@ -376,7 +413,7 @@ usage         TokenUsage(input_tokens, output_tokens)
 | `write_file` | Create or overwrite a file |
 | `edit_file` | Targeted patch (old_str → new_str) |
 | `list_dir` | List directory contents |
-| `search_files` | Grep / glob across the workspace |
+| `search_files` | Grep / glob across the workspace (supports changed-only filtering) |
 
 All paths validated against a configurable **workspace root**.
 
@@ -633,6 +670,7 @@ Package layout (for complex extensions):
 | `click` | CLI arg parsing & REPL |
 | `rich` | Terminal rendering |
 | `openai` | OpenAI + compatible APIs |
+| `anthropic` | Anthropic Claude |
 | `google-genai` | Google Gemini |
 | `httpx` | Ollama (plain HTTP) |
 | `pydantic` + `pydantic-settings` | Config validation |

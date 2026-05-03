@@ -176,3 +176,30 @@ def log_error(error: str) -> None:
     lines.append("")
     lines.append("")
     _write("\n".join(lines) + "\n")
+
+
+def log_extension_event(extension_name: str, event: str, payload: dict[str, Any] | None = None) -> None:
+    """Log an extension-level operational event.
+
+    This is intended for important extension internals (e.g. memory retrieval
+    decisions) so they appear in the same `--trace-log` stream.
+    """
+    if _trace_path is None:
+        return
+    data = payload or {}
+    lines: list[str] = []
+    lines.append(f"{'─' * 72}")
+    lines.append(
+        f"🔧 EXT EVENT  turn={_turn_counter}  time={datetime.now(timezone.utc).strftime('%H:%M:%S')}"
+    )
+    lines.append(f"{'─' * 72}")
+    lines.append(f"  extension: {extension_name}")
+    lines.append(f"  event: {event}")
+    if data:
+        dump = json.dumps(data, ensure_ascii=False, indent=2)
+        lines.append("  payload:")
+        for line in dump.splitlines():
+            lines.append(f"    {line}")
+    lines.append("")
+    lines.append("")
+    _write("\n".join(lines) + "\n")

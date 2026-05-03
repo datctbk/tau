@@ -13,6 +13,9 @@ tau                        # interactive REPL
 ## Features
 
 - **Multi-provider**: OpenAI, Anthropic Claude, Google Gemini, Ollama (local), MLX (Apple Silicon local) — swap with `-p` / `-m`
+- **Built-in task primitives**: `task_create`, `task_update`, `task_list` plus plan mode (`/plan on|off|status`, `/tasks`)
+- **Code index (Merkle)**: changed-file tracking, `/code-index-status`, `/code-index-refresh`, changed-only file search path
+- **MCP resources/tools (minimal built-in)**: `mcp_list_resources`, `mcp_read_resource`, `mcp_list_tools`, `mcp_call_tool`, `/mcp-resources`, `/mcp-tools`
 - **Output modes**: interactive (rich TUI), print (`-P`), JSON (`--mode json`), and RPC (`--mode rpc`) for process integration
 - **Piped stdin**: `echo "prompt" | tau run` auto-detects non-TTY and uses print mode
 - **SDK**: `from tau import create_session` — embed tau in your Python apps
