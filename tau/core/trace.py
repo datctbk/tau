@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,23 @@ logger = logging.getLogger(__name__)
 
 _trace_path: Path | None = None
 _turn_counter: int = 0
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _truncate(text: str, max_chars: int, *, indent_note: str = "  ") -> str:
+    """Truncate text to max_chars. max_chars <= 0 means no truncation."""
+    if max_chars <= 0:
+        return text
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n{indent_note}... ({len(text)} chars total, truncated)"
 
 
 def configure_trace(path: str | None) -> None:
@@ -52,16 +70,17 @@ def _fmt_message(m: Message) -> str:
     if m.tool_call_id:
         parts[0] += f" (tool_call_id={m.tool_call_id})"
 
-    content = m.content or ""
-    if len(content) > 2000:
-        content = content[:2000] + f"\n  ... ({len(content)} chars total, truncated)"
+    max_msg_chars = _env_int("TAU_TRACE_MAX_MESSAGE_CHARS", 2000)
+    content = _truncate(m.content or "", max_msg_chars, indent_note="  ")
     if content:
         for line in content.splitlines():
             parts.append(f"    {line}")
 
     if m.tool_calls:
+        max_args_chars = _env_int("TAU_TRACE_MAX_TOOL_ARGS_CHARS", 5000)
         for tc in m.tool_calls:
             args_json = json.dumps(tc.arguments, indent=2, ensure_ascii=False)
+            args_json = _truncate(args_json, max_args_chars, indent_note="    ")
             parts.append(f"    [TOOL_CALL] {tc.name} (id={tc.id})")
             for aline in args_json.splitlines():
                 parts.append(f"      {aline}")
@@ -123,19 +142,20 @@ def log_response(response: ProviderResponse) -> None:
     lines.append(f"  usage: {response.usage.input_tokens} in / {response.usage.output_tokens} out")
 
     if response.content:
-        content = response.content
-        if len(content) > 3000:
-            content = content[:3000] + f"\n  ... ({len(response.content)} chars total, truncated)"
+        max_resp_chars = _env_int("TAU_TRACE_MAX_RESPONSE_CHARS", 3000)
+        content = _truncate(response.content, max_resp_chars, indent_note="  ")
         lines.append("")
         lines.append("  Content:")
         for line in content.splitlines():
             lines.append(f"    {line}")
 
     if response.tool_calls:
+        max_args_chars = _env_int("TAU_TRACE_MAX_TOOL_ARGS_CHARS", 5000)
         lines.append("")
         lines.append(f"  Tool calls ({len(response.tool_calls)}):")
         for tc in response.tool_calls:
             args_json = json.dumps(tc.arguments, indent=2, ensure_ascii=False)
+            args_json = _truncate(args_json, max_args_chars, indent_note="    ")
             lines.append(f"    [{tc.name}] (id={tc.id})")
             for aline in args_json.splitlines():
                 lines.append(f"      {aline}")
@@ -154,11 +174,8 @@ def log_thinking(thinking_text: str) -> None:
     lines.append(f"💭 THINKING  turn={_turn_counter}  time={datetime.now(timezone.utc).strftime('%H:%M:%S')}")
     lines.append(f"{'─' * 72}")
     lines.append("")
-    if len(thinking_text) > 5000:
-        lines.append(thinking_text[:5000])
-        lines.append(f"  ... ({len(thinking_text)} chars total, truncated)")
-    else:
-        lines.append(thinking_text)
+    max_thinking_chars = _env_int("TAU_TRACE_MAX_THINKING_CHARS", 5000)
+    lines.append(_truncate(thinking_text, max_thinking_chars, indent_note="  "))
     lines.append("")
     lines.append("")
     _write("\n".join(lines) + "\n")
