@@ -25,8 +25,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
 def _truncate(text: str, max_chars: int, *, indent_note: str = "  ") -> str:
     """Truncate text to max_chars. max_chars <= 0 means no truncation."""
+    if _env_bool("TAU_TRACE_FULL", False):
+        return text
     if max_chars <= 0:
         return text
     if len(text) <= max_chars:
