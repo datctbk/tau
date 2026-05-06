@@ -413,7 +413,7 @@ class ExtensionRegistry:
             logger.warning("Extension %r tools() raised: %s", name, exc)
             tools = []
         for tool in tools:
-            registry.register(tool)
+            registry.register(tool, owner=name)
 
         # Slash commands
         for cmd in ext.slash_commands():
