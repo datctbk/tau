@@ -79,14 +79,14 @@ def _fmt_message(m: Message) -> str:
     if m.tool_call_id:
         parts[0] += f" (tool_call_id={m.tool_call_id})"
 
-    max_msg_chars = _env_int("TAU_TRACE_MAX_MESSAGE_CHARS", 2000)
+    max_msg_chars = _env_int("TAU_TRACE_MAX_MESSAGE_CHARS", 0)
     content = _truncate(m.content or "", max_msg_chars, indent_note="  ")
     if content:
         for line in content.splitlines():
             parts.append(f"    {line}")
 
     if m.tool_calls:
-        max_args_chars = _env_int("TAU_TRACE_MAX_TOOL_ARGS_CHARS", 5000)
+        max_args_chars = _env_int("TAU_TRACE_MAX_TOOL_ARGS_CHARS", 0)
         for tc in m.tool_calls:
             args_json = json.dumps(tc.arguments, indent=2, ensure_ascii=False)
             args_json = _truncate(args_json, max_args_chars, indent_note="    ")
@@ -151,7 +151,7 @@ def log_response(response: ProviderResponse) -> None:
     lines.append(f"  usage: {response.usage.input_tokens} in / {response.usage.output_tokens} out")
 
     if response.content:
-        max_resp_chars = _env_int("TAU_TRACE_MAX_RESPONSE_CHARS", 3000)
+        max_resp_chars = _env_int("TAU_TRACE_MAX_RESPONSE_CHARS", 0)
         content = _truncate(response.content, max_resp_chars, indent_note="  ")
         lines.append("")
         lines.append("  Content:")
@@ -159,7 +159,7 @@ def log_response(response: ProviderResponse) -> None:
             lines.append(f"    {line}")
 
     if response.tool_calls:
-        max_args_chars = _env_int("TAU_TRACE_MAX_TOOL_ARGS_CHARS", 5000)
+        max_args_chars = _env_int("TAU_TRACE_MAX_TOOL_ARGS_CHARS", 0)
         lines.append("")
         lines.append(f"  Tool calls ({len(response.tool_calls)}):")
         for tc in response.tool_calls:
