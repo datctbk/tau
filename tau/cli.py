@@ -2961,6 +2961,31 @@ def _repl(
     # -- footer data ---------------------------------------------------------
     import shutil as _shutil
     _footer_tau_config = [tau_config if tau_config is not None else load_config()]
+    _hb_cache = [{"ts": 0.0, "active": False, "blink": False}]
+
+    def _heartbeat_footer_icon() -> str:
+        try:
+            import time as _time
+
+            now = _time.time()
+            cache = _hb_cache[0]
+            # Throttle file reads for footer render.
+            if now - float(cache.get("ts", 0.0)) > 1.0:
+                p = Path(agent._config.workspace_root) / ".tau" / "assistant" / "heartbeat_state.json"
+                active = False
+                if p.exists():
+                    raw = p.read_text(encoding="utf-8")
+                    obj = json.loads(raw)
+                    active = bool((obj or {}).get("active", False))
+                cache["active"] = active
+                cache["ts"] = now
+                cache["blink"] = not bool(cache.get("blink", False))
+            if not bool(cache.get("active", False)):
+                return ""
+            # Alternate symbols so user sees heartbeat ticking.
+            return " ♥" if bool(cache.get("blink", False)) else " ♡"
+        except Exception:
+            return ""
 
     def _get_footer_line1() -> ANSI:
         ws_name = Path(agent._config.workspace_root).name
@@ -2969,7 +2994,8 @@ def _repl(
         think_str = f" [{thinking}]" if thinking and thinking != "off" else ""
         left_plain = f"  {ws_name}"
         left_ansi = f"  {_ansi_fg(theme.system_color, dim=True)}{ws_name}{_RESET}"
-        right_plain = f"{model}{think_str}  "
+        hb_icon = _heartbeat_footer_icon()
+        right_plain = f"{model}{think_str}{hb_icon}  "
         try:
             width = _shutil.get_terminal_size().columns
         except Exception:
@@ -2978,7 +3004,8 @@ def _repl(
         return ANSI(
             f"{left_ansi}"
             f"{' ' * pad}"
-            f"{_ansi_fg(theme.accent_color)}{model}{_ansi_fg(theme.system_color, dim=True)}{think_str}{_RESET}  "
+            f"{_ansi_fg(theme.accent_color)}{model}{_ansi_fg(theme.system_color, dim=True)}{think_str}{_RESET}"
+            f"{_ansi_fg(theme.success_color)}{hb_icon}{_RESET}  "
         )
 
     def _get_footer_line2() -> ANSI:
