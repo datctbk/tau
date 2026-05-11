@@ -301,6 +301,9 @@ class TauConfig(BaseSettings):
     prompt_budget_output_reserve: int = 1000
     prompt_budget_max_tools_total: int = 12
     dynamic_prompt_builder_enabled: bool = False
+    semantic_retrieval: bool = False
+    semantic_embeddings_enabled: bool = False
+    semantic_vector_index_enabled: bool = False
 
     # provider sub-configs
     openai: OpenAIProviderConfig = OpenAIProviderConfig()

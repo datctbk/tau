@@ -41,4 +41,15 @@ tau                        # interactive REPL
 | ollama   | *(local, no key needed)* |
 | mlx      | *(local Apple Silicon, no key needed)* |
 
+## Semantic Retrieval (Opt-in)
+
+Tau keeps the default retrieval path **lexical/minimal**.
+
+- `TAU_SEMANTIC_RETRIEVAL=1`: enables semantic retrieval mode (master switch)
+- `TAU_EMBEDDING_CACHE_ENABLED=1`: enables embedding-cache participation
+- `TAU_SEMANTIC_EMBEDDINGS_ENABLED=1`: enables embedder component (requires master switch)
+- `TAU_SEMANTIC_VECTOR_INDEX_ENABLED=1`: enables vector-index component (requires master switch)
+
+Default behavior (no flags): lexical path only, semantic components off.
+
 See [RUN.md](RUN.md) for the full usage guide and [DESIGN.md](DESIGN.md) for the architecture.
