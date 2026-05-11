@@ -36,6 +36,32 @@ def _resolve(path: str, workspace_root: str | None = None) -> Path:
     return resolved
 
 
+def _get_changed_rel_paths(workspace_root: Path) -> set[str]:
+    try:
+        from tau.core.code_index import detect_workspace_changes
+
+        changes, _new_manifest, _old_manifest = detect_workspace_changes(workspace_root)
+        return set(changes.added + changes.modified)
+    except Exception:
+        return set()
+
+
+def _filter_targets_changed_only(root: Path, targets: list[Path]) -> list[Path]:
+    changed = _get_changed_rel_paths(Path(_workspace_root).resolve())
+    if not changed:
+        return targets
+    ws_root = Path(_workspace_root).resolve()
+    filtered: list[Path] = []
+    for t in targets:
+        try:
+            rel = t.resolve().relative_to(ws_root).as_posix()
+        except Exception:
+            continue
+        if rel in changed:
+            filtered.append(t)
+    return filtered
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
@@ -82,7 +108,12 @@ def list_dir(path: str = ".") -> str:
     return "\n".join(lines) if lines else "(empty directory)"
 
 
-def search_files(pattern: str, path: str = ".", use_regex: bool = False) -> str:
+def search_files(
+    pattern: str,
+    path: str = ".",
+    use_regex: bool = False,
+    changed_only: bool = False,
+) -> str:
     root = _resolve(path)
     if use_regex:
         try:
@@ -90,9 +121,10 @@ def search_files(pattern: str, path: str = ".", use_regex: bool = False) -> str:
         except re.error as exc:
             return f"Invalid regex: {exc}"
     matches: list[str] = []
-    for dirpath, _, filenames in os.walk(root):
-        for fname in filenames:
-            fpath = Path(dirpath) / fname
+    targets = [f for f in root.rglob("*") if f.is_file()] if root.is_dir() else ([root] if root.is_file() else [])
+    if changed_only:
+        targets = _filter_targets_changed_only(root, targets)
+    for fpath in targets:
             try:
                 text = fpath.read_text(encoding="utf-8", errors="ignore")
             except OSError:
@@ -111,6 +143,7 @@ def grep(
     case_insensitive: bool = False,
     include: str = "",
     max_results: int = 200,
+    changed_only: bool = False,
 ) -> str:
     """Search for a regex pattern across file contents."""
     root = _resolve(path)
@@ -133,6 +166,8 @@ def grep(
         targets = [f for f in root.rglob("*") if f.is_file()]
     else:
         targets = [f for f in root.iterdir() if f.is_file()]
+    if changed_only:
+        targets = _filter_targets_changed_only(root, targets)
 
     for fpath in sorted(targets):
         if include_pat and not include_pat.search(fpath.name):
@@ -159,6 +194,7 @@ def find(
     type: str = "",
     max_depth: int = -1,
     max_results: int = 200,
+    changed_only: bool = False,
 ) -> str:
     """Find files or directories by name pattern and/or type."""
     root = _resolve(path)
@@ -167,6 +203,8 @@ def find(
     except re.error as exc:
         return f"Invalid name regex: {exc}"
     results: list[str] = []
+
+    changed = _get_changed_rel_paths(Path(_workspace_root).resolve()) if changed_only else set()
 
     def _walk(cur: Path, depth: int) -> None:
         if max_depth >= 0 and depth > max_depth:
@@ -195,7 +233,19 @@ def find(
                         rel = entry.relative_to(Path(_workspace_root).resolve())
                     except ValueError:
                         rel = entry
-                    results.append(str(rel))
+                    rel_str = str(rel)
+                    if changed_only:
+                        rel_posix = Path(rel_str).as_posix()
+                        if entry.is_file():
+                            if rel_posix in changed:
+                                results.append(rel_str)
+                        else:
+                            # Include directory only if it contains any changed file.
+                            prefix = rel_posix.rstrip("/") + "/"
+                            if any(c.startswith(prefix) for c in changed):
+                                results.append(rel_str)
+                    else:
+                        results.append(rel_str)
             if entry.is_dir():
                 _walk(entry, depth + 1)
 
@@ -231,6 +281,56 @@ def ls(path: str = ".", all: bool = False, long: bool = False) -> str:
             mode, size, mtime = "?---------", 0, "?"
         name = f"{e.name}{'/' if e.is_dir() else ''}"
         lines.append(f"{mode}  {size:>10}  {mtime}  {name}")
+    return "\n".join(lines)
+
+
+def code_index_get_changed(path: str = ".", persist: bool = False, max_paths: int = 200) -> str:
+    """Return changed files according to code index Merkle manifests."""
+    root = _resolve(path)
+    workspace_root = Path(_workspace_root).resolve()
+    try:
+        from tau.core.code_index import detect_workspace_changes, refresh_code_index
+
+        if persist:
+            stats = refresh_code_index(workspace_root)
+            changes = stats["changes"]
+            added = changes.added
+            modified = changes.modified
+            deleted = changes.deleted
+            unchanged_count = changes.unchanged_count
+            file_count = int(stats.get("file_count", 0))
+            duration_ms = int(stats.get("duration_ms", 0))
+        else:
+            changes, new_manifest, _old_manifest = detect_workspace_changes(workspace_root)
+            added = changes.added
+            modified = changes.modified
+            deleted = changes.deleted
+            unchanged_count = changes.unchanged_count
+            file_count = len(new_manifest.get("files", {}))
+            duration_ms = 0
+    except Exception as exc:
+        return f"Error: code index unavailable: {exc}"
+
+    # If path is a subdirectory, filter relative changed paths to that subtree.
+    if root != workspace_root:
+        try:
+            sub = root.relative_to(workspace_root).as_posix().rstrip("/") + "/"
+            added = [p for p in added if p.startswith(sub)]
+            modified = [p for p in modified if p.startswith(sub)]
+            deleted = [p for p in deleted if p.startswith(sub)]
+        except Exception:
+            pass
+
+    lines = [
+        f"added={len(added)} modified={len(modified)} deleted={len(deleted)} unchanged={unchanged_count} files={file_count}"
+    ]
+    if duration_ms:
+        lines.append(f"duration_ms={duration_ms}")
+    combined = [("A", p) for p in added] + [("M", p) for p in modified] + [("D", p) for p in deleted]
+    for kind, rel in combined[: max(1, max_paths)]:
+        lines.append(f"{kind} {rel}")
+    if len(combined) > max_paths:
+        lines.append(f"... and {len(combined) - max_paths} more")
     return "\n".join(lines)
 
 
@@ -289,6 +389,7 @@ FS_TOOLS: list[ToolDefinition] = [
             "pattern": ToolParameter(type="string", description="The string or regex pattern to search for."),
             "path": ToolParameter(type="string", description="Root directory to search in. Defaults to '.'.", required=False),
             "use_regex": ToolParameter(type="boolean", description="If true, treat pattern as a regex.", required=False),
+            "changed_only": ToolParameter(type="boolean", description="If true, search only added/modified files from code index.", required=False),
         },
         handler=search_files,
     ),
@@ -306,6 +407,7 @@ FS_TOOLS: list[ToolDefinition] = [
             "case_insensitive": ToolParameter(type="boolean", description="Case-insensitive matching (default false).", required=False),
             "include": ToolParameter(type="string", description="Regex filter on filename (e.g. '\\.py$'). Empty = all files.", required=False),
             "max_results": ToolParameter(type="integer", description="Maximum number of matching lines to return (default 200).", required=False),
+            "changed_only": ToolParameter(type="boolean", description="If true, search only added/modified files from code index.", required=False),
         },
         handler=grep,
     ),
@@ -320,8 +422,22 @@ FS_TOOLS: list[ToolDefinition] = [
             "type": ToolParameter(type="string", description="Filter by type: 'f' = files only, 'd' = directories only. Empty = both.", required=False),
             "max_depth": ToolParameter(type="integer", description="Maximum directory depth (-1 = unlimited).", required=False),
             "max_results": ToolParameter(type="integer", description="Maximum number of results (default 200).", required=False),
+            "changed_only": ToolParameter(type="boolean", description="If true, return only paths affected in added/modified set.", required=False),
         },
         handler=find,
+    ),
+    ToolDefinition(
+        name="code_index_get_changed",
+        description=(
+            "Get changed files from Merkle code index (added/modified/deleted). "
+            "Use persist=true to refresh and save index stats first."
+        ),
+        parameters={
+            "path": ToolParameter(type="string", description="Workspace subpath scope. Defaults to '.'.", required=False),
+            "persist": ToolParameter(type="boolean", description="Refresh and persist manifest/stats before reporting.", required=False),
+            "max_paths": ToolParameter(type="integer", description="Maximum changed paths to show.", required=False),
+        },
+        handler=code_index_get_changed,
     ),
     ToolDefinition(
         name="ls",

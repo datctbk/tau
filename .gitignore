@@ -7,8 +7,6 @@ tau/skills/__pycache__/
 tau/tools/__pycache__/
 tests/__pycache__/
 llm_trace.log
-llm_trace.log
-llm_trace.log
 tau/extensions/__pycache__/pretty_json.cpython-312.pyc
 tau/extensions/__pycache__/word_count.cpython-312.pyc
 .tau/audit/assistant-actions.jsonl
@@ -18,5 +16,13 @@ tau/extensions/__pycache__/pretty_json.cpython-311.pyc
 tau/extensions/__pycache__/word_count.cpython-311.pyc
 tau/extensions/__pycache__/pretty_json.cpython-310.pyc
 tau/extensions/__pycache__/word_count.cpython-310.pyc
+<<<<<<< HEAD
 tau/extensions/__pycache__/mcp_resources.cpython-312.pyc
 tau/extensions/__pycache__/task_planner.cpython-312.pyc
+=======
+tau/extensions/__pycache__/task_planner.cpython-311.pyc
+tau/extensions/__pycache__/__init__.cpython-311.pyc
+tau/extensions/__pycache__/mcp_resources.cpython-311.pyc
+tau/extensions/__pycache__/task_planner.cpython-312.pyc
+tau/extensions/__pycache__/mcp_resources.cpython-312.pyc
+>>>>>>> agents

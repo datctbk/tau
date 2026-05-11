@@ -2,7 +2,7 @@
 
 import pytest
 from pathlib import Path
-from tau.tools.fs import read_file, write_file, edit_file, list_dir, search_files, grep, find, ls, _resolve
+from tau.tools.fs import read_file, write_file, edit_file, list_dir, search_files, grep, find, ls, code_index_get_changed, _resolve
 
 
 @pytest.fixture()
@@ -10,13 +10,16 @@ def workspace(tmp_path: Path) -> Path:
     """Patch workspace root to a temp dir for all fs tool calls."""
     import tau.tools.fs as fs_mod
     original = fs_mod._resolve
+    original_root = fs_mod._workspace_root
 
     def patched_resolve(path: str, workspace_root: str = ".") -> Path:
         return original(path, str(tmp_path))
 
     fs_mod._resolve = patched_resolve
+    fs_mod._workspace_root = str(tmp_path)
     yield tmp_path
     fs_mod._resolve = original
+    fs_mod._workspace_root = original_root
 
 
 def test_write_and_read(workspace: Path):
@@ -78,6 +81,18 @@ def test_search_files_regex(workspace: Path):
     assert "data.txt" in out
 
 
+def test_search_files_changed_only(workspace: Path):
+    write_file("a.txt", "needle here\n")
+    write_file("b.txt", "needle there\n")
+    # establish baseline
+    code_index_get_changed(persist=True)
+    # mutate only a.txt
+    write_file("a.txt", "needle changed\n")
+    out = search_files("needle", ".", changed_only=True)
+    assert "a.txt" in out
+    assert "b.txt" not in out
+
+
 # ---------------------------------------------------------------------------
 # grep
 # ---------------------------------------------------------------------------
@@ -132,6 +147,16 @@ def test_grep_no_match(workspace: Path):
     assert "No matches" in out
 
 
+def test_grep_changed_only(workspace: Path):
+    write_file("one.py", "FLAG = 1\n")
+    write_file("two.py", "FLAG = 2\n")
+    code_index_get_changed(persist=True)
+    write_file("two.py", "FLAG = 20\n")
+    out = grep("FLAG", ".", changed_only=True)
+    assert "two.py" in out
+    assert "one.py" not in out
+
+
 # ---------------------------------------------------------------------------
 # find
 # ---------------------------------------------------------------------------
@@ -180,6 +205,26 @@ def test_find_no_match(workspace: Path):
     write_file("f.py", "")
     out = find(".", name="ZZZNOMATCH")
     assert "No matches" in out
+
+
+def test_find_changed_only_files(workspace: Path):
+    write_file("x/a.py", "")
+    write_file("x/b.py", "")
+    code_index_get_changed(persist=True)
+    write_file("x/b.py", "changed\n")
+    out = find(".", type="f", changed_only=True)
+    assert "x/b.py" in out
+    assert "x/a.py" not in out
+
+
+def test_code_index_get_changed_basic(workspace: Path):
+    write_file("m.py", "1\n")
+    # first persist creates baseline from current files
+    baseline = code_index_get_changed(persist=True)
+    assert "files=" in baseline
+    write_file("m.py", "2\n")
+    out = code_index_get_changed()
+    assert "modified=1" in out or "\nM m.py" in out
 
 
 # ---------------------------------------------------------------------------

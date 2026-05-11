@@ -255,7 +255,7 @@ def create_session(
     Parameters
     ----------
     provider : str, optional
-        LLM provider name (openai, google, ollama).
+        LLM provider name (openai, google, anthropic, ollama).
     model : str, optional
         Model name/ID.
     system_prompt : str, optional

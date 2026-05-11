@@ -54,7 +54,7 @@ class DefaultPolicyProfileEvaluator:
 
     def _classify_risk(self, call: ToolCall) -> str:
         name = call.name
-        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls", "task_events"}:
+        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls", "task_events", "task_list"}:
             return "low"
         if name in {"write_file", "edit_file", "task_update", "task_stop", "task_create"}:
             return "medium"

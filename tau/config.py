@@ -46,6 +46,11 @@ class GoogleProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GOOGLE_")
     api_key: str = ""
 
+class AnthropicProviderConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ANTHROPIC_")
+    api_key: str = ""
+    base_url: str = "https://api.anthropic.com"
+
 
 class OllamaProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OLLAMA_")
@@ -300,6 +305,7 @@ class TauConfig(BaseSettings):
     # provider sub-configs
     openai: OpenAIProviderConfig = OpenAIProviderConfig()
     google: GoogleProviderConfig = GoogleProviderConfig()
+    anthropic: AnthropicProviderConfig = AnthropicProviderConfig()
     ollama: OllamaProviderConfig = OllamaProviderConfig()
     mlx: MLXProviderConfig = MLXProviderConfig()
     unsloth: UnslothProviderConfig = UnslothProviderConfig()
@@ -380,7 +386,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> TauConfig:
     init: dict[str, Any] = {}
     defaults = raw.get("defaults", {})
     init.update(defaults)
-    for section in ("openai", "google", "ollama", "unsloth"):
+    for section in ("openai", "google", "anthropic", "ollama", "unsloth"):
         if section in raw.get("providers", {}):
             init[section] = raw["providers"][section]
     if "shell" in raw.get("tools", {}):

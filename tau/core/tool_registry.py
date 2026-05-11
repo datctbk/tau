@@ -18,29 +18,40 @@ class ToolNotFoundError(Exception):
 class ToolRegistry:
     def __init__(self, max_result_chars: int = 0) -> None:
         self._tools: dict[str, ToolDefinition] = {}
+        self._owners: dict[str, str] = {}
         self._max_result_chars = max_result_chars  # 0 = unlimited
 
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
 
-    def register(self, tool: ToolDefinition) -> None:
+    def register(self, tool: ToolDefinition, owner: str | None = None) -> None:
+        owner_name = owner or "core"
         if tool.name in self._tools:
-            logger.warning("Tool %r already registered — overwriting.", tool.name)
+            previous_owner = self._owners.get(tool.name, "unknown")
+            logger.warning(
+                "Tool %r already registered by %r — overwriting with %r.",
+                tool.name,
+                previous_owner,
+                owner_name,
+            )
         self._tools[tool.name] = tool
+        self._owners[tool.name] = owner_name
         logger.debug("Registered tool: %s", tool.name)
 
-    def register_many(self, tools: list[ToolDefinition]) -> None:
+    def register_many(self, tools: list[ToolDefinition], owner: str | None = None) -> None:
         for tool in tools:
-            self.register(tool)
+            self.register(tool, owner=owner)
 
     def unregister(self, name: str) -> None:
         """Remove a tool by name (no-op if not registered)."""
         self._tools.pop(name, None)
+        self._owners.pop(name, None)
 
     def keep_only(self, names: list[str]) -> None:
         """Keep only the named tools, remove everything else."""
         self._tools = {k: v for k, v in self._tools.items() if k in names}
+        self._owners = {k: v for k, v in self._owners.items() if k in names}
 
     # ------------------------------------------------------------------
     # Lookup
@@ -57,6 +68,9 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return list(self._tools.keys())
+
+    def owner_of(self, name: str) -> str | None:
+        return self._owners.get(name)
 
     # ------------------------------------------------------------------
     # Dispatch

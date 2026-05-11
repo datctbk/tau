@@ -18,6 +18,10 @@ def get_provider(config: TauConfig, agent_config: AgentConfig):
         from tau.providers.google_provider import GoogleProvider
         return GoogleProvider(config, agent_config)
 
+    if name == "anthropic":
+        from tau.providers.anthropic_provider import AnthropicProvider
+        return AnthropicProvider(config, agent_config)
+
     if name == "ollama":
         from tau.providers.ollama_provider import OllamaProvider
         return OllamaProvider(config, agent_config)
@@ -31,5 +35,5 @@ def get_provider(config: TauConfig, agent_config: AgentConfig):
         return UnslothProvider(config, agent_config)
 
     raise ValueError(
-        f"Unknown provider {name!r}. Available: openai, google, ollama, mlx, unsloth"
+        f"Unknown provider {name!r}. Available: openai, google, anthropic, ollama, mlx, unsloth"
     )

@@ -115,8 +115,24 @@ class TestSlashHelp:
 
     def test_all_new_commands_in_help_text(self):
         """The _SLASH_HELP string must mention every new command."""
-        for cmd in ("/clear", "/compact", "/model", "/tokens"):
+        for cmd in ("/clear", "/compact", "/model", "/tokens", "/code-index-status"):
             assert cmd in _cli_mod._SLASH_HELP
+
+
+class TestCodeIndexStatusCommand:
+    def test_returns_true_without_agent(self):
+        handled, _ = _call("/code-index-status", agent=None)
+        assert handled is True
+
+    def test_returns_true_with_agent(self):
+        agent = _make_agent()
+        handled, _ = _call("/code-index-status", agent=agent)
+        assert handled is True
+
+    def test_refresh_returns_true_with_agent(self):
+        agent = _make_agent()
+        handled, _ = _call("/code-index-refresh", agent=agent)
+        assert handled is True
 
 
 # ===========================================================================
