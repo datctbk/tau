@@ -28,6 +28,7 @@ tau                        # interactive REPL
 - **Themes**: customisable colours via `[theme]` in `~/.tau/config.toml`
 - **Configurable tool set**: disable or whitelist tools via `[tools]` config
 - **Auto-compaction**: automatic context trimming when the window fills up
+- **Modern compaction (opt-in)**: pass `-zip` to enable pre-prune + iterative summary + quality checks; default remains legacy compaction
 - **Auto-retry**: transparent retry on rate-limit and transient errors
 - **File & shell tools**: sandboxed read/write/search/edit/shell with confirmation
 

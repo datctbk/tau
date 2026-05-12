@@ -209,6 +209,7 @@ class Compactor:
     def __init__(self, config: AgentConfig) -> None:
         self._config = config
         self._overflow_recovery_attempted = False
+        self._modern_compaction = bool(getattr(config, "modern_compaction", False))
 
     # ------------------------------------------------------------------
     # Public API
@@ -259,15 +260,20 @@ class Compactor:
             # Not enough history to summarise — return unchanged
             raise ValueError("Not enough messages to compact (need at least %d non-system messages)" % (_MIN_MESSAGES_TO_COMPACT + _KEEP_RECENT_AFTER_COMPACT))
 
-        previous_summary, delta_messages = self._extract_previous_summary(to_summarise)
-        transcript = self._build_transcript(delta_messages)
-        summary = self._call_summary(
-            transcript,
-            provider,
-            previous_summary=previous_summary,
-        )
-        summary = self._enforce_summary_hard_budget(summary)
-        summary = self._quality_guard(summary, source_messages=delta_messages, source_transcript=transcript)
+        if self._modern_compaction:
+            previous_summary, delta_messages = self._extract_previous_summary(to_summarise)
+            transcript = self._build_transcript(delta_messages)
+            summary = self._call_summary(
+                transcript,
+                provider,
+                previous_summary=previous_summary,
+            )
+            summary = self._enforce_summary_hard_budget(summary)
+            summary = self._quality_guard(summary, source_messages=delta_messages, source_transcript=transcript)
+        else:
+            # Legacy path: no tool-output pre-prune, no iterative update, no quality patch.
+            transcript = self._build_transcript_legacy(to_summarise)
+            summary = self._call_summary(transcript, provider)
 
         summary_msg = Message(
             role="user",
@@ -310,6 +316,17 @@ class Compactor:
         for m in messages:
             role_label = m.role.upper()
             content = self._prune_message_content(m)
+            if m.tool_calls:
+                calls = "; ".join(f"{tc.name}({tc.arguments})" for tc in m.tool_calls)
+                content = f"{content}\n[tool calls: {calls}]".strip()
+            parts.append(f"{role_label}: {content}")
+        return "\n\n".join(parts)
+
+    def _build_transcript_legacy(self, messages: list[Message]) -> str:
+        parts: list[str] = []
+        for m in messages:
+            role_label = m.role.upper()
+            content = (m.content or "").strip()
             if m.tool_calls:
                 calls = "; ".join(f"{tc.name}({tc.arguments})" for tc in m.tool_calls)
                 content = f"{content}\n[tool calls: {calls}]".strip()

@@ -238,6 +238,7 @@ _AGENT_OPTIONS = [
     ),
     click.option("--topk", type=int, default=0, show_default=True, help="Top-k relevant memory entries to inject per turn (0 disables)."),
     click.option("--code-index/--no-code-index", "code_index", default=False, help="Inject Merkle code-index delta (changed files) into prompt context."),
+    click.option("--zip", "zip_mode", is_flag=True, default=False, help="Enable modern context compression (pre-prune + iterative + quality checks)."),
     click.option("--minimal", is_flag=True, default=False, help="Run with minimal core profile (disable optional capabilities/extensions)."),
     click.option(
         "--dynamic-prompt-builder/--no-dynamic-prompt-builder",
@@ -307,6 +308,7 @@ def _make_agent_config(
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     minimal: bool = False,
+    zip_mode: bool = False,
 ) -> AgentConfig:
     return _bootstrap_make_agent_config(
         tau_config=tau_config,
@@ -323,6 +325,7 @@ def _make_agent_config(
         dynamic_prompt_builder=dynamic_prompt_builder,
         prompt_budget=prompt_budget,
         minimal=minimal,
+        zip_mode=zip_mode,
     )
 
 # ---------------------------------------------------------------------------
@@ -3540,6 +3543,7 @@ def run_cmd(
     tools_filter: str | None = None,
     topk: int = 0,
     code_index: bool = False,
+    zip_mode: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
@@ -3614,6 +3618,7 @@ def run_cmd(
         max_cost=max_cost,
         topk=topk,
         code_index=code_index,
+        zip_mode=zip_mode,
         dynamic_prompt_builder=dynamic_prompt_builder,
         minimal=minimal,
         prompt_budget=prompt_budget,
@@ -3788,6 +3793,7 @@ def sessions_fork(
     max_cost: float | None, no_session: bool,
     topk: int = 0,
     code_index: bool = False,
+    zip_mode: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
@@ -3823,6 +3829,7 @@ def sessions_fork(
             max_cost=max_cost,
             topk=topk,
             code_index=code_index,
+            zip_mode=zip_mode,
             dynamic_prompt_builder=dynamic_prompt_builder,
             minimal=minimal,
             prompt_budget=prompt_budget,
@@ -3901,6 +3908,7 @@ def sessions_import(
     trace_log: str | None,
     topk: int = 0,
     code_index: bool = False,
+    zip_mode: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
@@ -3949,6 +3957,7 @@ def sessions_import(
             max_cost=max_cost,
             topk=topk,
             code_index=code_index,
+            zip_mode=zip_mode,
             dynamic_prompt_builder=dynamic_prompt_builder,
             minimal=minimal,
             prompt_budget=prompt_budget,
