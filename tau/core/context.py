@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -179,10 +180,27 @@ _COMPACTION_PROMPT = (
     "Do not include filler text.\n\n{transcript}"
 )
 
+_COMPACTION_UPDATE_PROMPT = (
+    "You are updating an existing conversation summary.\n"
+    "Keep the exact structure:\n"
+    "1) Current Objective\n"
+    "2) Decisions Made\n"
+    "3) Files Changed (path + what changed)\n"
+    "4) Errors and Fixes\n"
+    "5) Open Tasks / Next Steps (max 5)\n"
+    "6) Important Constraints\n\n"
+    "Existing summary:\n{previous_summary}\n\n"
+    "New conversation delta:\n{delta_transcript}\n\n"
+    "Produce an updated merged summary preserving key details and unresolved tasks."
+)
+
 # Minimum non-system messages required before compaction is attempted
 _MIN_MESSAGES_TO_COMPACT = 4
 # How many recent messages to always keep verbatim after compaction
 _KEEP_RECENT_AFTER_COMPACT = 4
+_TOOL_OUTPUT_PRUNE_CHARS = 4000
+_SUMMARY_HARD_MAX_CHARS = 20000
+_SUMMARY_PREFIX = "[Compacted conversation summary — earlier history replaced]"
 
 
 class Compactor:
@@ -241,12 +259,19 @@ class Compactor:
             # Not enough history to summarise — return unchanged
             raise ValueError("Not enough messages to compact (need at least %d non-system messages)" % (_MIN_MESSAGES_TO_COMPACT + _KEEP_RECENT_AFTER_COMPACT))
 
-        transcript = self._build_transcript(to_summarise)
-        summary = self._call_summary(transcript, provider)
+        previous_summary, delta_messages = self._extract_previous_summary(to_summarise)
+        transcript = self._build_transcript(delta_messages)
+        summary = self._call_summary(
+            transcript,
+            provider,
+            previous_summary=previous_summary,
+        )
+        summary = self._enforce_summary_hard_budget(summary)
+        summary = self._quality_guard(summary, source_messages=delta_messages, source_transcript=transcript)
 
         summary_msg = Message(
             role="user",
-            content=f"[Compacted conversation summary — earlier history replaced]\n{summary}",
+            content=f"{_SUMMARY_PREFIX}\n{summary}",
         )
         new_messages = system_msgs + [summary_msg] + keep_recent
         tokens_after = _messages_tokens(new_messages)
@@ -284,16 +309,22 @@ class Compactor:
         parts: list[str] = []
         for m in messages:
             role_label = m.role.upper()
-            content = (m.content or "").strip()
+            content = self._prune_message_content(m)
             if m.tool_calls:
                 calls = "; ".join(f"{tc.name}({tc.arguments})" for tc in m.tool_calls)
                 content = f"{content}\n[tool calls: {calls}]".strip()
             parts.append(f"{role_label}: {content}")
         return "\n\n".join(parts)
 
-    def _call_summary(self, transcript: str, provider: Any) -> str:
+    def _call_summary(self, transcript: str, provider: Any, *, previous_summary: str | None = None) -> str:
         """Ask the active provider for a compaction summary."""
-        prompt = _COMPACTION_PROMPT.format(transcript=transcript)
+        if previous_summary:
+            prompt = _COMPACTION_UPDATE_PROMPT.format(
+                previous_summary=previous_summary,
+                delta_transcript=transcript,
+            )
+        else:
+            prompt = _COMPACTION_PROMPT.format(transcript=transcript)
         compaction_messages = [
             Message(role="system", content=_COMPACTION_SYSTEM),
             Message(role="user", content=prompt),
@@ -318,6 +349,79 @@ class Compactor:
             logger.warning("Compactor: summary call failed (%s), using transcript excerpt", exc)
             # Truncate transcript as fallback
             return transcript[:2000] + ("\n…[truncated]" if len(transcript) > 2000 else "")
+
+    def _prune_message_content(self, message: Message) -> str:
+        content = (message.content or "").strip()
+        # Pre-prune long tool outputs before summarization to reduce noise/cost.
+        if message.role == "tool" and len(content) > _TOOL_OUTPUT_PRUNE_CHARS:
+            head = content[:2000].rstrip()
+            tail = content[-2000:].lstrip()
+            return (
+                f"[tool output pruned: {len(content):,} chars]\n"
+                f"{head}\n...\n{tail}"
+            )
+        return content
+
+    def _extract_previous_summary(self, messages: list[Message]) -> tuple[str | None, list[Message]]:
+        for i in range(len(messages) - 1, -1, -1):
+            m = messages[i]
+            if m.role != "user":
+                continue
+            text = (m.content or "").strip()
+            if text.startswith(_SUMMARY_PREFIX):
+                prev = text[len(_SUMMARY_PREFIX):].strip()
+                return (prev or None), messages[i + 1 :]
+        return None, messages
+
+    def _enforce_summary_hard_budget(self, summary: str) -> str:
+        s = summary.strip()
+        if len(s) <= _SUMMARY_HARD_MAX_CHARS:
+            return s
+        clipped = s[:_SUMMARY_HARD_MAX_CHARS]
+        cut = clipped.rfind("\n")
+        if cut > int(_SUMMARY_HARD_MAX_CHARS * 0.85):
+            clipped = clipped[:cut]
+        return clipped.rstrip() + "\n\n[truncated to fit summary budget]"
+
+    def _quality_guard(self, summary: str, *, source_messages: list[Message], source_transcript: str) -> str:
+        lower = summary.lower()
+        missing: list[str] = []
+        checks = {
+            "objective": ("current objective" in lower),
+            "files": bool(re.search(r"(files changed|\.py|\.ts|\.js|\.java|\.go|\.rs|\.md)", lower)),
+            "errors": bool(re.search(r"(error|exception|failed|traceback|fix)", lower)),
+            "tasks": bool(re.search(r"(open tasks|next steps|todo|to do)", lower)),
+        }
+        for k, ok in checks.items():
+            if not ok:
+                missing.append(k)
+        if not missing:
+            return summary
+
+        # Build concise fallback hints from source transcript/messages.
+        file_hits = sorted(set(re.findall(r"\b[\w./-]+\.(?:py|ts|js|java|go|rs|md|json|yaml|yml)\b", source_transcript)))
+        error_lines: list[str] = []
+        for line in source_transcript.splitlines():
+            l = line.lower()
+            if any(t in l for t in ("error", "exception", "failed", "traceback")):
+                error_lines.append(line.strip())
+            if len(error_lines) >= 3:
+                break
+        objective_hint = ""
+        for m in source_messages:
+            if m.role == "user" and (m.content or "").strip():
+                objective_hint = (m.content or "").strip().splitlines()[0][:180]
+                break
+        checklist = ["", "Quality Patch (auto-added):"]
+        if "objective" in missing and objective_hint:
+            checklist.append(f"- Current Objective: {objective_hint}")
+        if "files" in missing and file_hits:
+            checklist.append("- Files Changed: " + ", ".join(file_hits[:8]))
+        if "errors" in missing and error_lines:
+            checklist.append("- Errors and Fixes: " + " | ".join(error_lines[:2]))
+        if "tasks" in missing:
+            checklist.append("- Open Tasks / Next Steps: Reconfirm pending tasks from latest user requests.")
+        return summary.rstrip() + "\n" + "\n".join(checklist)
 
 
 # ---------------------------------------------------------------------------

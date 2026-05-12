@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import patch
 from tau.core.context import (
+    Compactor,
     ContextManager,
     SlidingWindowStrategy,
     SummariseStrategy,
@@ -184,3 +185,45 @@ def test_summarise_call_failure_falls_back():
     # Should not raise; system prompt must survive
     assert isinstance(result, list)
     assert result[0].role == "system"
+
+
+def test_compactor_prunes_long_tool_output():
+    c = Compactor(_config())
+    msg = Message(role="tool", content="x" * 5000, name="run_bash")
+    out = c._prune_message_content(msg)
+    assert "tool output pruned" in out
+    assert len(out) < 2000
+
+
+def test_compactor_extracts_previous_summary():
+    c = Compactor(_config())
+    msgs = [
+        Message(role="user", content="hello"),
+        Message(role="user", content="[Compacted conversation summary — earlier history replaced]\nold summary"),
+        Message(role="assistant", content="new delta"),
+    ]
+    prev, delta = c._extract_previous_summary(msgs)
+    assert prev == "old summary"
+    assert len(delta) == 1
+    assert delta[0].content == "new delta"
+
+
+def test_compactor_hard_budget_truncates_summary():
+    c = Compactor(_config())
+    long_summary = "a" * 9500
+    out = c._enforce_summary_hard_budget(long_summary)
+    assert len(out) < len(long_summary)
+    assert "truncated to fit summary budget" in out
+
+
+def test_compactor_quality_guard_adds_patch_when_missing_sections():
+    c = Compactor(_config())
+    summary = "Short summary only."
+    src = [
+        Message(role="user", content="Please fix failing tests in app/main.py"),
+        Message(role="assistant", content="Error: AssertionError in test_main.py"),
+    ]
+    transcript = "USER: fix app/main.py\nASSISTANT: Error: AssertionError in test_main.py"
+    out = c._quality_guard(summary, source_messages=src, source_transcript=transcript)
+    assert "Quality Patch (auto-added):" in out
+    assert "Current Objective:" in out or "Files Changed:" in out
