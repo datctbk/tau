@@ -166,6 +166,11 @@ Tau keeps the default retrieval path **lexical/minimal**.
 - `TAU_EMBEDDING_CACHE_ENABLED=1`: enables embedding-cache participation
 - `TAU_EMBEDDING_CACHE_MODEL=<name>`: embedding cache model key (default: `default`)
 - `TAU_EMBEDDING_CACHE_DB_PATH=<path>`: custom embedding cache DB path
+- `TAU_SEMANTIC_STORE_ENABLED=1`: ingest changed chunks into local semantic store (default on when semantic mode is on)
+- `TAU_SEMANTIC_STORE_DB_PATH=<path>`: custom semantic store DB path (default: `~/.tau/semantic_store.db`)
+- `TAU_SEMANTIC_MODEL=<name>`: semantic vector model key (default: `local-hash-v1`)
+- `TAU_SEMANTIC_LEXICAL_WEIGHT=<float>`: hybrid lexical weight (default `0.45`)
+- `TAU_SEMANTIC_VECTOR_WEIGHT=<float>`: hybrid vector weight (default `0.55`)
 - `TAU_SEMANTIC_EMBEDDINGS_ENABLED=1`: enables embedder component (requires master switch)
 - `TAU_SEMANTIC_VECTOR_INDEX_ENABLED=1`: enables vector-index component (requires master switch)
 

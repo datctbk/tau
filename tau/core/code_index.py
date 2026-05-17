@@ -18,6 +18,7 @@ from typing import Any
 from tau.core.chunker import chunk_file
 from tau.core.embedding_cache import EmbeddingCache
 from tau.core.retrieval_mode import retrieval_mode_label, semantic_retrieval_enabled
+from tau.core.semantic_pipeline import ingest_workspace_changes
 
 DEFAULT_IGNORE_DIRS = {
     ".git",
@@ -422,6 +423,13 @@ def refresh_code_index(
             changes,
             model=model,
             cache_db_path=cache_db_path,
+        )
+    if semantic_retrieval_enabled() and _flag_enabled(os.getenv("TAU_SEMANTIC_STORE_ENABLED", "1")):
+        stats["semantic_store"] = ingest_workspace_changes(
+            workspace_root,
+            changes,
+            model=os.getenv("TAU_SEMANTIC_MODEL", "local-hash-v1"),
+            db_path=os.getenv("TAU_SEMANTIC_STORE_DB_PATH"),
         )
     spath.parent.mkdir(parents=True, exist_ok=True)
     spath.write_text(json.dumps(stats, indent=2), encoding="utf-8")

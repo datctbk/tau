@@ -40,7 +40,7 @@ from tau.core.assistant_events import append_assistant_event, make_assistant_eve
 from tau.core.policy import DefaultToolPolicyHook
 from tau.core.context import _messages_tokens
 from tau.core.capabilities import build_capabilities
-from tau.core.rehydrate import build_lexical_rehydrate_block
+from tau.core.rehydrate import build_rehydrate_block
 
 if TYPE_CHECKING:
     from tau.core.context import ContextManager
@@ -245,7 +245,7 @@ class Agent:
             )
             return messages
 
-        block = build_lexical_rehydrate_block(
+        block = build_rehydrate_block(
             query=query,
             workspace_root=self._config.workspace_root,
             max_chunks=max(1, int(os.getenv("TAU_REHYDRATE_MAX_CHUNKS", "8"))),

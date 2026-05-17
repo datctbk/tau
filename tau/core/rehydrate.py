@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 from tau.core.chunker import SUPPORTED_EXTS, chunk_file
 from tau.core.code_index import detect_workspace_changes, scan_workspace_files
+from tau.core.retrieval_mode import semantic_retrieval_enabled
+from tau.core.semantic_pipeline import embed_text_local_hash, semantic_model_name
+from tau.core.semantic_store import SemanticStore
 
 
 def _tokenize(text: str) -> set[str]:
@@ -90,3 +94,78 @@ def build_lexical_rehydrate_block(
         return ""
     return "\n\n".join(lines)
 
+
+def build_rehydrate_block(
+    *,
+    query: str,
+    workspace_root: str | Path,
+    max_chunks: int = 8,
+    max_chars_per_chunk: int = 1200,
+    max_total_chars: int = 7000,
+    max_files_scan: int = 120,
+) -> str:
+    # Default: lexical only.
+    if not semantic_retrieval_enabled():
+        return build_lexical_rehydrate_block(
+            query=query,
+            workspace_root=workspace_root,
+            max_chunks=max_chunks,
+            max_chars_per_chunk=max_chars_per_chunk,
+            max_total_chars=max_total_chars,
+            max_files_scan=max_files_scan,
+        )
+
+    # Semantic opt-in path with safe lexical fallback.
+    try:
+        store = SemanticStore(db_path=Path(os.getenv("TAU_SEMANTIC_STORE_DB_PATH")) if os.getenv("TAU_SEMANTIC_STORE_DB_PATH") else None)
+        try:
+            qv = embed_text_local_hash(query)
+            hits = store.hybrid_search(
+                query=query,
+                query_vector=qv,
+                model=semantic_model_name(),
+                limit=max(max_chunks * 3, 20),
+                lexical_weight=float(os.getenv("TAU_SEMANTIC_LEXICAL_WEIGHT", "0.45")),
+                semantic_weight=float(os.getenv("TAU_SEMANTIC_VECTOR_WEIGHT", "0.55")),
+            )
+        finally:
+            store.close()
+        if not hits:
+            return build_lexical_rehydrate_block(
+                query=query,
+                workspace_root=workspace_root,
+                max_chunks=max_chunks,
+                max_chars_per_chunk=max_chars_per_chunk,
+                max_total_chars=max_total_chars,
+                max_files_scan=max_files_scan,
+            )
+        lines = ["Rehydrated Code Context (hybrid lexical+semantic, post-compaction):"]
+        used = len(lines[0])
+        selected = 0
+        for h in hits:
+            snippet = h.snippet or ""
+            if len(snippet) > max_chars_per_chunk:
+                snippet = snippet[:max_chars_per_chunk].rstrip() + "\n...[truncated]"
+            header = (
+                f"- {h.path}:{h.start_line}-{h.end_line} "
+                f"(score={h.score:.3f}, lex={h.lexical_score:.3f}, sem={h.semantic_score:.3f})"
+            )
+            block = f"{header}\n```text\n{snippet}\n```"
+            cost = len(block) + 2
+            if used + cost > max_total_chars:
+                break
+            lines.append(block)
+            used += cost
+            selected += 1
+            if selected >= max_chunks:
+                break
+        return "" if selected == 0 else "\n\n".join(lines)
+    except Exception:
+        return build_lexical_rehydrate_block(
+            query=query,
+            workspace_root=workspace_root,
+            max_chunks=max_chunks,
+            max_chars_per_chunk=max_chars_per_chunk,
+            max_total_chars=max_total_chars,
+            max_files_scan=max_files_scan,
+        )
