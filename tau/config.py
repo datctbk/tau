@@ -280,8 +280,8 @@ class TauConfig(BaseSettings):
 
     provider: str = "openai"
     model: str = "gpt-4o"
-    max_tokens: int = 6144 * 18
-    max_turns: int = 20
+    max_tokens: int = 6144 * 15
+    max_turns: int = 40
     trim_strategy: str = "sliding_window"
     compaction_enabled: bool = True
     compaction_threshold: float = 0.60
