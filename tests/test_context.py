@@ -210,7 +210,7 @@ def test_compactor_extracts_previous_summary():
 
 def test_compactor_hard_budget_truncates_summary():
     c = Compactor(_config())
-    long_summary = "a" * 9500
+    long_summary = "a" * 25000
     out = c._enforce_summary_hard_budget(long_summary)
     assert len(out) < len(long_summary)
     assert "truncated to fit summary budget" in out

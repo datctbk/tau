@@ -14,7 +14,7 @@ from tau.core.code_index import (
     refresh_code_index,
     save_manifest,
 )
-from tau.core.embedding_cache import EmbeddingCache
+
 
 
 def _write(path: Path, content: str) -> None:
@@ -97,40 +97,3 @@ def test_refresh_persists_stats_and_manifest(tmp_path: Path):
     assert loaded.get("file_count", 0) >= 1
     assert loaded.get("retrieval_mode") == "lexical"
 
-
-def test_refresh_embedding_cache_stats_when_enabled(tmp_path: Path, monkeypatch):
-    f = tmp_path / "a.py"
-    _write(f, "def add(a, b):\n    return a + b\n")
-    text = f.read_text(encoding="utf-8")
-    chunks = chunk_file("a.py", text)
-    assert chunks
-
-    db = tmp_path / "emb.db"
-    cache = EmbeddingCache(db_path=db)
-    try:
-        # Preload first chunk as cache-hit, leave rest as miss.
-        cache.set(chunks[0].content_hash, "test-embed-v1", [0.1, 0.2])
-    finally:
-        cache.close()
-
-    monkeypatch.setenv("TAU_SEMANTIC_RETRIEVAL", "1")
-    monkeypatch.setenv("TAU_EMBEDDING_CACHE_ENABLED", "1")
-    monkeypatch.setenv("TAU_EMBEDDING_CACHE_MODEL", "test-embed-v1")
-    monkeypatch.setenv("TAU_EMBEDDING_CACHE_DB_PATH", str(db))
-
-    stats = refresh_code_index(tmp_path)
-    emb = stats.get("embedding_cache")
-    assert isinstance(emb, dict)
-    assert emb.get("model") == "test-embed-v1"
-    assert int(emb.get("chunk_count", 0)) >= 1
-    assert int(emb.get("cache_hit", 0)) >= 1
-    assert int(emb.get("cache_miss", 0)) >= 0
-
-
-def test_refresh_embedding_cache_ignored_when_semantic_off(tmp_path: Path, monkeypatch):
-    _write(tmp_path / "a.py", "def f():\n    return 1\n")
-    monkeypatch.delenv("TAU_SEMANTIC_RETRIEVAL", raising=False)
-    monkeypatch.setenv("TAU_EMBEDDING_CACHE_ENABLED", "1")
-    stats = refresh_code_index(tmp_path)
-    assert stats.get("retrieval_mode") == "lexical"
-    assert "embedding_cache" not in stats

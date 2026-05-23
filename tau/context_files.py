@@ -85,10 +85,11 @@ def load_context_files(workspace_root: str) -> str:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not read context file %s: %s", path, exc)
     # Inject Subdirectory Hints
-    hint_engine = SubdirectoryHintEngine(workspace_root)
-    hints_text = hint_engine.generate_hints()
-    if hints_text:
-        parts.append(f"# Subdirectory Hints\n\n{hints_text}")
+    if parts:
+        hint_engine = SubdirectoryHintEngine(workspace_root)
+        hints_text = hint_engine.generate_hints()
+        if hints_text:
+            parts.append(f"# Subdirectory Hints\n\n{hints_text}")
 
     if not parts:
         return ""

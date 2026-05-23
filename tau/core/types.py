@@ -68,6 +68,7 @@ class ToolDefinition:
     description: str
     parameters: dict[str, ToolParameter]  # param_name → ToolParameter
     handler: Callable[..., Any]
+    risk: str = "medium"
 
     def to_json_schema(self) -> dict[str, Any]:
         """Return the JSON Schema object for the function parameters."""

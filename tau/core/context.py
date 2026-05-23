@@ -371,8 +371,8 @@ class Compactor:
         content = (message.content or "").strip()
         # Pre-prune long tool outputs before summarization to reduce noise/cost.
         if message.role == "tool" and len(content) > _TOOL_OUTPUT_PRUNE_CHARS:
-            head = content[:2000].rstrip()
-            tail = content[-2000:].lstrip()
+            head = content[:800].rstrip()
+            tail = content[-800:].lstrip()
             return (
                 f"[tool output pruned: {len(content):,} chars]\n"
                 f"{head}\n...\n{tail}"

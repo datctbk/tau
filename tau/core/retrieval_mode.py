@@ -10,8 +10,12 @@ def _truthy(name: str) -> bool:
 def semantic_retrieval_enabled() -> bool:
     """Master switch for semantic retrieval path.
 
-    Default path remains lexical unless TAU_SEMANTIC_RETRIEVAL=1.
+    Default path remains lexical unless custom rehydrate providers are registered
+    or TAU_SEMANTIC_RETRIEVAL=1 is set.
     """
+    from tau.core.rehydrate import _rehydrate_providers
+    if len(_rehydrate_providers) > 0:
+        return True
     return _truthy("TAU_SEMANTIC_RETRIEVAL")
 
 

@@ -147,7 +147,7 @@ class UnslothProvider:
         self._model = agent_config.model
         self._base_url = config.unsloth.base_url.rstrip("/")
         timeout_s = max(5.0, float(config.unsloth.timeout_seconds))
-        stream_read_timeout_s = float(config.unsloth.stream_read_timeout_seconds)
+        stream_read_timeout_s = float(getattr(config.unsloth, "stream_read_timeout_seconds", 30.0))
 
         # Default request timeout for non-streaming calls.
         self._request_timeout = httpx.Timeout(timeout_s)

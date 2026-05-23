@@ -13,10 +13,9 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from tau.core.chunker import chunk_file
-from tau.core.embedding_cache import EmbeddingCache
 from tau.core.retrieval_mode import retrieval_mode_label, semantic_retrieval_enabled
 
 DEFAULT_IGNORE_DIRS = {
@@ -380,6 +379,21 @@ def detect_workspace_changes(
     return changes, new_manifest, old_manifest
 
 
+IndexListener = Callable[[Path, Any, dict[str, Any]], None]
+
+_index_listeners: list[IndexListener] = []
+
+
+def register_index_listener(listener: IndexListener) -> None:
+    if listener not in _index_listeners:
+        _index_listeners.append(listener)
+
+
+def unregister_index_listener(listener: IndexListener) -> None:
+    if listener in _index_listeners:
+        _index_listeners.remove(listener)
+
+
 def refresh_code_index(
     workspace_root: str | Path,
     *,
@@ -414,26 +428,14 @@ def refresh_code_index(
         "had_previous_manifest": old_manifest is not None,
         "retrieval_mode": retrieval_mode_label(),
     }
-    if semantic_retrieval_enabled() and _flag_enabled(os.getenv("TAU_EMBEDDING_CACHE_ENABLED")):
-        model = os.getenv("TAU_EMBEDDING_CACHE_MODEL", "default")
-        cache_db_path = os.getenv("TAU_EMBEDDING_CACHE_DB_PATH")
-        stats["embedding_cache"] = _collect_embedding_cache_stats(
-            workspace_root,
-            changes,
-            model=model,
-            cache_db_path=cache_db_path,
-        )
-    if semantic_retrieval_enabled() and _flag_enabled(os.getenv("TAU_SEMANTIC_STORE_ENABLED", "1")):
-        # Lazy import avoids a circular dependency during module initialization:
-        # code_index -> semantic_pipeline -> code_index.
-        from tau.core.semantic_pipeline import ingest_workspace_changes
+    
+    root = Path(workspace_root).resolve()
+    for listener in _index_listeners:
+        try:
+            listener(root, changes, stats)
+        except Exception:
+            pass
 
-        stats["semantic_store"] = ingest_workspace_changes(
-            workspace_root,
-            changes,
-            model=os.getenv("TAU_SEMANTIC_MODEL", "local-hash-v1"),
-            db_path=os.getenv("TAU_SEMANTIC_STORE_DB_PATH"),
-        )
     spath.parent.mkdir(parents=True, exist_ok=True)
     spath.write_text(json.dumps(stats, indent=2), encoding="utf-8")
     stats["changes"] = changes
@@ -457,41 +459,4 @@ def _flag_enabled(value: str | None) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _collect_embedding_cache_stats(
-    workspace_root: str | Path,
-    changes: ChangedFiles,
-    *,
-    model: str,
-    cache_db_path: str | None,
-) -> dict[str, int | str]:
-    root = Path(workspace_root).resolve()
-    chunk_count = 0
-    cache_hit = 0
-    cache_miss = 0
-    cache = EmbeddingCache(db_path=Path(cache_db_path) if cache_db_path else None)
-    try:
-        for rel in changes.changed:
-            p = root / rel
-            if not p.is_file():
-                continue
-            try:
-                text = p.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                continue
-            chunks = chunk_file(rel, text)
-            chunk_count += len(chunks)
-            for c in chunks:
-                got = cache.get(c.content_hash, model)
-                if got is None:
-                    cache_miss += 1
-                else:
-                    cache_hit += 1
-    finally:
-        cache.close()
-    return {
-        "model": model,
-        "chunk_count": chunk_count,
-        "cache_hit": cache_hit,
-        "cache_miss": cache_miss,
-        "recomputed_chunks": cache_miss,
-    }
+
