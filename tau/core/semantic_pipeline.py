@@ -4,10 +4,13 @@ import math
 import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tau.core.chunker import chunk_file
-from tau.core.code_index import ChangedFiles
 from tau.core.semantic_store import SemanticStore
+
+if TYPE_CHECKING:
+    from tau.core.code_index import ChangedFiles
 
 
 def _tokenize(text: str) -> list[str]:
