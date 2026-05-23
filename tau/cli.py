@@ -275,6 +275,7 @@ _AGENT_OPTIONS = [
             "Default follows config and is off unless enabled."
         ),
     ),
+    click.option("--aidlc", is_flag=True, default=False, help="Enable tau-aidlc behavior for this run."),
 ]
 
 def _agent_options(fn):
@@ -3572,6 +3573,7 @@ def run_cmd(
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
+    aidlc: bool = False,
     prompt: str | None = None,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
@@ -3621,6 +3623,8 @@ def run_cmd(
             mode = "print"
 
     _setup_logging(verbose)
+    # Gate tau-aidlc behavior explicitly by CLI flag.
+    os.environ["TAU_AIDLC_ENABLED"] = "1" if aidlc else "0"
     # Resolve trace log path: flag without value → default in workspace
     if trace_log == "__default__":
         trace_log = str(Path(workspace).resolve() / "tau-trace.log")
