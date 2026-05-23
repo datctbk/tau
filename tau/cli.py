@@ -114,6 +114,23 @@ class _Theme:
 theme = _Theme()
 
 
+def _ascii_banner() -> str:
+    """Return startup ASCII banner for interactive REPL.
+
+    Disable by setting TAU_ASCII_BANNER=0|false|off|no.
+    """
+    raw = os.getenv("TAU_ASCII_BANNER", "1").strip().lower()
+    if raw in {"0", "false", "off", "no"}:
+        return ""
+    return (
+        r"  _______              " + "\n"
+        r" /_  __(_)___  __  __  " + "\n"
+        r"  / / / / __ \/ / / /  " + "\n"
+        r" / / / / /_/ / /_/ /   " + "\n"
+        r"/_/ /_/\____/\__,_/    "
+    )
+
+
 class _ThemeWatcher:
     """Background poller that hot-reloads the active theme when its source
     file changes on disk.
@@ -2813,8 +2830,16 @@ def _repl(
         else f"{_ansi_fg(theme.system_color, dim=True)}Extensions: (none){_RESET}\n"
     )
 
+    banner = _ascii_banner()
+    banner_line = (
+        f"{_ansi_fg(theme.accent_color, bold=True)}{banner}{_RESET}\n"
+        if banner
+        else ""
+    )
+
     header = (
-        f"{_ansi_fg(theme.accent_color, bold=True)}tau v{_tau_version()}{_RESET}"
+        banner_line
+        + f"{_ansi_fg(theme.accent_color, bold=True)}tau v{_tau_version()}{_RESET}"
         f"  {_ansi_fg(theme.assistant_color)}{agent_config.provider}/{agent_config.model}{_RESET}"
         f"  {_ansi_fg(theme.system_color, dim=True)}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
         + loaded_line

@@ -18,7 +18,6 @@ from typing import Any
 from tau.core.chunker import chunk_file
 from tau.core.embedding_cache import EmbeddingCache
 from tau.core.retrieval_mode import retrieval_mode_label, semantic_retrieval_enabled
-from tau.core.semantic_pipeline import ingest_workspace_changes
 
 DEFAULT_IGNORE_DIRS = {
     ".git",
@@ -425,6 +424,10 @@ def refresh_code_index(
             cache_db_path=cache_db_path,
         )
     if semantic_retrieval_enabled() and _flag_enabled(os.getenv("TAU_SEMANTIC_STORE_ENABLED", "1")):
+        # Lazy import avoids a circular dependency during module initialization:
+        # code_index -> semantic_pipeline -> code_index.
+        from tau.core.semantic_pipeline import ingest_workspace_changes
+
         stats["semantic_store"] = ingest_workspace_changes(
             workspace_root,
             changes,

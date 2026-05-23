@@ -4,10 +4,13 @@ import math
 import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tau.core.chunker import chunk_file
-from tau.core.code_index import ChangedFiles
 from tau.core.semantic_store import SemanticStore
+
+if TYPE_CHECKING:
+    from tau.core.code_index import ChangedFiles
 
 
 def _tokenize(text: str) -> list[str]:
@@ -40,7 +43,7 @@ def embed_text_local_hash(text: str, dim: int = 256) -> list[float]:
 
 def ingest_workspace_changes(
     workspace_root: str | Path,
-    changes: ChangedFiles,
+    changes: "ChangedFiles",
     *,
     model: str | None = None,
     db_path: str | None = None,
@@ -83,4 +86,3 @@ def ingest_workspace_changes(
         "ingested_chunks": ingested_chunks,
         "deleted_files": deleted_files,
     }
-
