@@ -143,7 +143,26 @@ class DefaultToolPolicyHook:
         except TypeError:
             decision = self._evaluator.decide(profile=self._profile, call=call)
 
-        if decision.requires_approval and self._is_preapproved_upstream(call):
+        is_preapproved_call = self._is_preapproved_upstream(call)
+        if is_preapproved_call and agent is not None:
+            agent.approved_risky_actions = True
+            if getattr(agent, "_config", None) is not None:
+                agent._config.approved_risky_actions = True
+
+        is_preapproved = (
+            is_preapproved_call or
+            (agent is not None and (
+                getattr(agent, "approved_risky_actions", False) or
+                (getattr(agent, "_config", None) is not None and getattr(agent._config, "approved_risky_actions", False))
+            ))
+        )
+
+        if decision.requires_approval and is_preapproved:
+            if call.name == "run_bash":
+                cmd = call.arguments.get("command")
+                if isinstance(cmd, str):
+                    from tau.tools.shell import mark_command_policy_approved
+                    mark_command_policy_approved(cmd)
             return PolicyDecision(
                 allow=decision.allow,
                 requires_approval=False,

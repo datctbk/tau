@@ -55,7 +55,7 @@ class DynamicPromptBuilder:
                 selected.append(frag)
                 current_tokens += cost
             else:
-                logger.warning("PromptBuilder: Dropped fragment '%s' to conserve context window.", frag.name)
+                logger.debug("PromptBuilder: Dropped fragment '%s' to conserve context window.", frag.name)
                 
         # We output in order of priority (highest first) since core instructions are usually more important
         parts = [f.content for f in selected]

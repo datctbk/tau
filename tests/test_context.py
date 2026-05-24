@@ -85,12 +85,12 @@ def test_dynamic_prompt_builder_budget():
     cfg = _config(dynamic_prompt_builder_enabled=True, max_tokens=8192)
     ctx = ContextManager(cfg)
     assert ctx.prompt_builder is not None
-    assert ctx.prompt_builder.max_tokens == 4915
+    assert ctx.prompt_builder.max_tokens == 1638
 
     # Test under small max_tokens (cap checks)
     cfg_small = _config(dynamic_prompt_builder_enabled=True, max_tokens=100)
     ctx_small = ContextManager(cfg_small)
-    assert ctx_small.prompt_builder.max_tokens == 80  # min(80, max(3200, 60)) = 80
+    assert ctx_small.prompt_builder.max_tokens == 100
 
 
 

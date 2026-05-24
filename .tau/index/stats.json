@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "generated_at": "2026-05-24T10:30:55.794246+00:00",
+  "workspace_root": "/Users/trantandat/Documents/agent-experience/claud-code-leak/tau",
+  "manifest_path": "/Users/trantandat/Documents/agent-experience/claud-code-leak/tau/.tau/index/merkle.json",
+  "root_hash": "da974e17b94ed231fb47ef4d212ce15955e32a77609af518572f9ad9daef446e",
+  "file_count": 113,
+  "added_count": 0,
+  "modified_count": 2,
+  "deleted_count": 0,
+  "changed_count": 2,
+  "unchanged_count": 111,
+  "duration_ms": 42,
+  "had_previous_manifest": true,
+  "retrieval_mode": "lexical"
+}

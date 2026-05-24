@@ -271,3 +271,42 @@ def test_ls_not_a_dir(workspace: Path):
     write_file("f.txt", "")
     with pytest.raises(NotADirectoryError):
         ls("f.txt")
+
+
+def test_fs_tools_ignores_internal_dirs(workspace: Path):
+    # Create matching patterns inside normal subpath and ignored subpaths
+    write_file("src/foo.py", "NFR requirements here")
+    write_file(".tau/sessions/session.json", "NFR requirements in session")
+    write_file("node_modules/pkg/index.js", "NFR requirements in node_modules")
+
+    # Verify find doesn't return files in ignored directories
+    found = find(".")
+    assert "src/foo.py" in found
+    assert ".tau/sessions/session.json" not in found
+    assert "node_modules/pkg/index.js" not in found
+
+    # Verify grep doesn't return matches in ignored directories
+    grep_res = grep("NFR", ".")
+    assert "src/foo.py" in grep_res
+    assert ".tau/sessions/session.json" not in grep_res
+    assert "node_modules/pkg/index.js" not in grep_res
+
+    # Verify search_files doesn't return matches in ignored directories
+    search_res = search_files("NFR", ".")
+    assert "src/foo.py" in search_res
+    assert "session.json" not in search_res
+    assert "index.js" not in search_res
+
+
+def test_grep_truncates_long_lines(workspace: Path):
+    # Create a giant line with the match at character 2000
+    prefix = "a" * 2000
+    giant_line = f"{prefix}MATCHPATTERN" + "b" * 2000 + "\n"
+    write_file("giant.txt", giant_line)
+
+    res = grep("MATCHPATTERN", ".")
+    assert "giant.txt" in res
+    assert "MATCHPATTERN" in res
+    assert "[line truncated: total 4,012 chars]" in res
+    # Ensure it only returns a slice and not the entire 4012 characters
+    assert len(res) < 1000

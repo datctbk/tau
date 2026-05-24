@@ -62,6 +62,18 @@ def _filter_targets_changed_only(root: Path, targets: list[Path]) -> list[Path]:
     return filtered
 
 
+def _is_ignored(path: Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(Path(_workspace_root).resolve())
+    except Exception:
+        rel = path
+    ignored = {".tau", ".git", ".venv", ".pytest_cache", "node_modules", "__pycache__", ".DS_Store"}
+    for part in rel.parts:
+        if part in ignored:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
@@ -121,7 +133,7 @@ def search_files(
         except re.error as exc:
             return f"Invalid regex: {exc}"
     matches: list[str] = []
-    targets = [f for f in root.rglob("*") if f.is_file()] if root.is_dir() else ([root] if root.is_file() else [])
+    targets = [f for f in root.rglob("*") if f.is_file() and not _is_ignored(f)] if root.is_dir() else ([root] if root.is_file() else [])
     if changed_only:
         targets = _filter_targets_changed_only(root, targets)
     for fpath in targets:
@@ -132,7 +144,31 @@ def search_files(
             for i, line in enumerate(text.splitlines(), 1):
                 hit = bool(compiled.search(line)) if use_regex else (pattern in line)
                 if hit:
-                    matches.append(f"{fpath.relative_to(root)}:{i}: {line.strip()}")
+                    line_content = line.strip()
+                    if len(line_content) > 1000:
+                        if use_regex:
+                            match = compiled.search(line_content)
+                            if match:
+                                start, end = match.span()
+                                left = max(0, start - 150)
+                                right = min(len(line_content), end + 150)
+                                prefix = "..." if left > 0 else ""
+                                suffix = "..." if right < len(line_content) else ""
+                                line_content = f"{prefix}{line_content[left:right]}{suffix} [line truncated: total {len(line_content):,} chars]"
+                            else:
+                                line_content = line_content[:1000] + " ... [line truncated]"
+                        else:
+                            start = line_content.find(pattern)
+                            if start != -1:
+                                end = start + len(pattern)
+                                left = max(0, start - 150)
+                                right = min(len(line_content), end + 150)
+                                prefix = "..." if left > 0 else ""
+                                suffix = "..." if right < len(line_content) else ""
+                                line_content = f"{prefix}{line_content[left:right]}{suffix} [line truncated: total {len(line_content):,} chars]"
+                            else:
+                                line_content = line_content[:1000] + " ... [line truncated]"
+                    matches.append(f"{fpath.relative_to(root)}:{i}: {line_content}")
     return "\n".join(matches[:200]) if matches else "No matches found."
 
 
@@ -163,9 +199,9 @@ def grep(
     if root.is_file():
         targets = [root]
     elif recursive:
-        targets = [f for f in root.rglob("*") if f.is_file()]
+        targets = [f for f in root.rglob("*") if f.is_file() and not _is_ignored(f)]
     else:
-        targets = [f for f in root.iterdir() if f.is_file()]
+        targets = [f for f in root.iterdir() if f.is_file() and not _is_ignored(f)]
     if changed_only:
         targets = _filter_targets_changed_only(root, targets)
 
@@ -182,7 +218,19 @@ def grep(
                     rel = fpath.relative_to(Path(_workspace_root).resolve())
                 except ValueError:
                     rel = fpath
-                matches.append(f"{rel}:{i}: {line.rstrip()}")
+                line_content = line.rstrip()
+                if len(line_content) > 1000:
+                    match = compiled.search(line_content)
+                    if match:
+                        start, end = match.span()
+                        left = max(0, start - 150)
+                        right = min(len(line_content), end + 150)
+                        prefix = "..." if left > 0 else ""
+                        suffix = "..." if right < len(line_content) else ""
+                        line_content = f"{prefix}{line_content[left:right]}{suffix} [line truncated: total {len(line_content):,} chars]"
+                    else:
+                        line_content = line_content[:1000] + " ... [line truncated]"
+                matches.append(f"{rel}:{i}: {line_content}")
                 if len(matches) >= max_results:
                     return "\n".join(matches) + f"\n(truncated at {max_results} results)"
     return "\n".join(matches) if matches else "No matches found."
@@ -214,6 +262,8 @@ def find(
         except PermissionError:
             return
         for entry in entries:
+            if _is_ignored(entry):
+                continue
             if len(results) >= max_results:
                 return
             # type filter

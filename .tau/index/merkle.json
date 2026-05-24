@@ -1,0 +1,1091 @@
+{
+  "version": 2,
+  "generated_at": "2026-05-24T10:30:55.793307+00:00",
+  "workspace_root": "/Users/trantandat/Documents/agent-experience/claud-code-leak/tau",
+  "root_hash": "da974e17b94ed231fb47ef4d212ce15955e32a77609af518572f9ad9daef446e",
+  "files": {
+    ".github/workflows/core-architecture.yml": {
+      "hash": "ed76dc6bd1b03f9b0834215d1904d5b7b7cb81f6aaf07cc6a47657cb2f9195b9",
+      "size": 709,
+      "mtime_ns": 1778509450494109501
+    },
+    ".gitignore": {
+      "hash": "45c8b4bdc711102c6d297fae7ad9cbdc209653a982a142c7ea163883f0ea32c4",
+      "size": 899,
+      "mtime_ns": 1778509620213095686
+    },
+    "DESIGN.md": {
+      "hash": "a0867a2b21e3da0b3c41379d267ef84604b212d950ef2ad1d9cf5c593385e38b",
+      "size": 27773,
+      "mtime_ns": 1778509543402038383
+    },
+    "NOTE.md": {
+      "hash": "961bd9fdff0ce64ef454839045800b6d708b20820ae094340f314641ab98de81",
+      "size": 1656,
+      "mtime_ns": 1775382938239314789
+    },
+    "README.md": {
+      "hash": "7cd99f743087d1fc3a4b5158ee73ffe68789be4cdffe058357dcaccd2ec2d3cd",
+      "size": 7672,
+      "mtime_ns": 1779025126919780921
+    },
+    "REVIEW_CHECKLIST.md": {
+      "hash": "b6615697feefb425bfa1ce0da9663118309f2f433feb02a804a15939f5fc0de9",
+      "size": 963,
+      "mtime_ns": 1778509450494975755
+    },
+    "RUN.md": {
+      "hash": "67c9240f72a413a988e741385effd313f777e17bf40cdff97bf29525caf0a86c",
+      "size": 23465,
+      "mtime_ns": 1775297021467270830
+    },
+    "debug.py": {
+      "hash": "f2a07521c36ba5878047f74f2baf499bb9349a01f6208ebba7ae8ebd7ad2519f",
+      "size": 625,
+      "mtime_ns": 1778509450495101006
+    },
+    "pyproject.toml": {
+      "hash": "ae9a80a8be0d7f381c43d242fe7422351b87c87cbd653315499cecad8ca6dc0c",
+      "size": 760,
+      "mtime_ns": 1778509543402417093
+    },
+    "tau/__init__.py": {
+      "hash": "d019321bb504857e0d269d613cdb5106698fd340c0e531ab34dcb620504d9876",
+      "size": 233,
+      "mtime_ns": 1775297021467908873
+    },
+    "tau/cli.py": {
+      "hash": "31d24cf371aac4abb39fa826b37866ccb8cceece590b9427e5a00511cdaed20c",
+      "size": 176617,
+      "mtime_ns": 1779525689221061945
+    },
+    "tau/cli_bootstrap.py": {
+      "hash": "643dbf4fc7133952a16b7e88df34b712078ec10a29eb6ee088ff9bef9584804a",
+      "size": 12551,
+      "mtime_ns": 1778599071109344099
+    },
+    "tau/cli_ui.py": {
+      "hash": "76198839fbca02ef3f20043b793cf28fb0b1cf73d4bf828282340bc934b629f5",
+      "size": 1457,
+      "mtime_ns": 1778509450495999968
+    },
+    "tau/config.py": {
+      "hash": "f963dba7d706474f26262c94bc0f24c085204d591caab557fa02650682934a60",
+      "size": 16970,
+      "mtime_ns": 1779205171755776380
+    },
+    "tau/context_files.py": {
+      "hash": "fa4e524d4d219236bbc446a94c55303518abf4f7662fa6df805c44da787d9226",
+      "size": 4071,
+      "mtime_ns": 1779616253546554959
+    },
+    "tau/core/__init__.py": {
+      "hash": "ebd8c61e17dbd07b3865fea41c12d2ca7c192572c71955382c715ac234c928f0",
+      "size": 64,
+      "mtime_ns": 1775297021468533416
+    },
+    "tau/core/agent.py": {
+      "hash": "7632fcf308c7594901f5fcf70fd1635da849f10cbf3eb8449a5048a87751455d",
+      "size": 44452,
+      "mtime_ns": 1779617644210369022
+    },
+    "tau/core/assistant_events.py": {
+      "hash": "9d5ebb257fdc03d1f57221746658c6c8b1391c37b14b7c3e22e125c8440aa67a",
+      "size": 1981,
+      "mtime_ns": 1778509450496664554
+    },
+    "tau/core/audit.py": {
+      "hash": "7c4545c8a53ec57defcaf896a96cdeac8e875f1a7bd554e30949a7203c32bf75",
+      "size": 696,
+      "mtime_ns": 1778509450496789472
+    },
+    "tau/core/capabilities.py": {
+      "hash": "cc1d3e9ce5a8146046499b914adcdde0cbc6d91884f321cf8e6332acc86fea19",
+      "size": 3627,
+      "mtime_ns": 1778509450496899139
+    },
+    "tau/core/chunker.py": {
+      "hash": "b8921195f118a1fa265b6e1125090d56cf19b36675be48e54f56ecab014bd4f5",
+      "size": 8841,
+      "mtime_ns": 1778509741743460080
+    },
+    "tau/core/code_index.py": {
+      "hash": "4ca6d10ea21fe2ff9fb76dda437d0038b6666c1b1699bf2f80e9c784520aaf63",
+      "size": 14999,
+      "mtime_ns": 1779616253547527672
+    },
+    "tau/core/context.py": {
+      "hash": "52dec26026f6345b61aba6714c027007b7ed08a5386102ec0b7bbab1584430b0",
+      "size": 21761,
+      "mtime_ns": 1779616822387870078
+    },
+    "tau/core/credential_pool.py": {
+      "hash": "f9a08df46316bfe43cca496fb8981a1109228b2e2a366967d2cd293f69845104",
+      "size": 11447,
+      "mtime_ns": 1778509450497259140
+    },
+    "tau/core/extension.py": {
+      "hash": "ab17f645cb645ec76dfcb0b38bb6fb2cf42579f637012dd0855f677e4231a700",
+      "size": 22457,
+      "mtime_ns": 1779616253548393176
+    },
+    "tau/core/model_metadata.py": {
+      "hash": "85cfe3821a0df38ef48b74365feacaf04f5c66bb9a76ea6cd1449b7564ddf1c3",
+      "size": 9773,
+      "mtime_ns": 1778509450497593100
+    },
+    "tau/core/policy.py": {
+      "hash": "ccbc191d9a17a1fee78cdba7ae575dcee316faffa1ce66a4ce010b1c800cd05b",
+      "size": 6089,
+      "mtime_ns": 1779616259129304767
+    },
+    "tau/core/prompt_builder.py": {
+      "hash": "64bc90eacd641460703c79d8b099a4d8dfdb99a0003db71771d74b2045becfaa",
+      "size": 2203,
+      "mtime_ns": 1779617100094757042
+    },
+    "tau/core/prompt_caching.py": {
+      "hash": "4334c92b609297f2fc92c6c8438ea063abf82e8726126954d5d8df9e3db7a29f",
+      "size": 2989,
+      "mtime_ns": 1778509450497946352
+    },
+    "tau/core/prompt_layers.py": {
+      "hash": "a43155978f9383ff72bc5d727c080232483cc8fbcc8ae5a320dd1c1a722887ea",
+      "size": 996,
+      "mtime_ns": 1778509450498051478
+    },
+    "tau/core/rate_limit_tracker.py": {
+      "hash": "3c6e4c62f33822340f1d6ea5a986ce520d4785ab8e11b25dcfb931ef71057c7d",
+      "size": 7898,
+      "mtime_ns": 1778509450498160936
+    },
+    "tau/core/rehydrate.py": {
+      "hash": "768886b1e02afb12f60dcc40d2bafb42bbabcdba1977982ef31819f42682d856",
+      "size": 4302,
+      "mtime_ns": 1779616253548997429
+    },
+    "tau/core/retrieval_mode.py": {
+      "hash": "042a5e9bc0baea71756b6c803de93c53f2b84cfd1a9fe417e4c3929a3727de45",
+      "size": 648,
+      "mtime_ns": 1779616253549586515
+    },
+    "tau/core/session.py": {
+      "hash": "b29844b3fef07373d556984afc460910d5f97a28caa97ebae4ce6493a60a6bb9",
+      "size": 14745,
+      "mtime_ns": 1779616259129835145
+    },
+    "tau/core/smart_routing.py": {
+      "hash": "249444642bddc610ec5522cc9173c846d551e12db85f316298abd5f28423567b",
+      "size": 5000,
+      "mtime_ns": 1778509450498267854
+    },
+    "tau/core/state.py": {
+      "hash": "28feb78bdaadfea9a5b25779e9aa09354a8ff4f0a12835b1375e6a601c35e1db",
+      "size": 27106,
+      "mtime_ns": 1778509450498616480
+    },
+    "tau/core/steering.py": {
+      "hash": "52928f74c25ba827e2553ea2998c4f40cda908fe82b542dfca35bae8f309fd6a",
+      "size": 3069,
+      "mtime_ns": 1775297021469187750
+    },
+    "tau/core/subdirectory_hints.py": {
+      "hash": "4ecab4796f7bdc80ec22e0460795d50fe05df13a852c446172cf12d8f3b2a630",
+      "size": 4049,
+      "mtime_ns": 1778509450498749064
+    },
+    "tau/core/tool_registry.py": {
+      "hash": "1d3f8c54b264a0e55b9b87a2e2c7faa4e662a6e4fad7d2aa16ebec0bc97c54f8",
+      "size": 4484,
+      "mtime_ns": 1778509543404200351
+    },
+    "tau/core/tool_runtime.py": {
+      "hash": "ed881296f7bffacaecd9eb2e1257d06a3ab7115e659d46c41da1a1e0e08a3147",
+      "size": 336,
+      "mtime_ns": 1778509450498867565
+    },
+    "tau/core/trace.py": {
+      "hash": "bc09ca0eb7ee6e22c316ed185136a6cfbbeba50df686089fbbe804dfa09893a4",
+      "size": 7734,
+      "mtime_ns": 1778509543404395519
+    },
+    "tau/core/types.py": {
+      "hash": "21d538649d117e4ad6a756ff8a747e7b16c6a4f921bd066ad566b8a9fbe98858",
+      "size": 13264,
+      "mtime_ns": 1779616259130206438
+    },
+    "tau/core/usage_pricing.py": {
+      "hash": "4ecd038851f29ec2539e43cd5894d03a2725847722d9c08155370dda440c7bdd",
+      "size": 14806,
+      "mtime_ns": 1778509450499217108
+    },
+    "tau/editor.py": {
+      "hash": "062fa79a83d0907bfa9b536f91b8337e44ec5604361826379b4dca07dd903989",
+      "size": 8920,
+      "mtime_ns": 1778509543404863396
+    },
+    "tau/extensions/__init__.py": {
+      "hash": "6b8e344361c12aba5e2f775cd1403aa5f12081722a91b3166a315b7dec343c37",
+      "size": 47,
+      "mtime_ns": 1775297021469769085
+    },
+    "tau/extensions/mcp_resources.py": {
+      "hash": "5bd5cc64c2d4f8b5d41b28c216e5e1de4c8259de4cb02526a5773db0ee9e8516",
+      "size": 12392,
+      "mtime_ns": 1778509543405050813
+    },
+    "tau/extensions/pretty_json.py": {
+      "hash": "9385845ceac2d8b4d18f972f120009bf9a90fed794a53c3f3efa6f2560bc2be1",
+      "size": 2623,
+      "mtime_ns": 1775297021470411795
+    },
+    "tau/extensions/task_planner.py": {
+      "hash": "09bf598cd09c32f3c21d36e60986c6bafd128115a18147f35fe14f3f1223d640",
+      "size": 11193,
+      "mtime_ns": 1778509543405276689
+    },
+    "tau/extensions/word_count.py": {
+      "hash": "92f7abb6d71997b7cedfe2e90d4b5a0de91110b68539b8c4f2a6b039e1626135",
+      "size": 1847,
+      "mtime_ns": 1775297021470483670
+    },
+    "tau/packages.py": {
+      "hash": "d726219d677279139ccc7d98b78827fc109792d7c7ca331028e1cf5eb96d1c14",
+      "size": 20119,
+      "mtime_ns": 1775382317259743373
+    },
+    "tau/prompts.py": {
+      "hash": "934e3e1b60fa720904b170344506c1059ca706689170b24de47fb63661273a6a",
+      "size": 5353,
+      "mtime_ns": 1775297021470721671
+    },
+    "tau/providers/__init__.py": {
+      "hash": "a1722305ecff847a3223207a18da5fe9a8ef3784dbd846ec23816c800aa5d529",
+      "size": 1309,
+      "mtime_ns": 1778509543405478524
+    },
+    "tau/providers/anthropic_provider.py": {
+      "hash": "3ba73d62d5cf8c4733899c1a28eba7063eb4f4d7640667a3adecc329094469d7",
+      "size": 6517,
+      "mtime_ns": 1778509543405649066
+    },
+    "tau/providers/base.py": {
+      "hash": "54e57bbfa7657c6d1d6feeb66df82e3ffd014d485af4dd3982922634ba4d25ca",
+      "size": 488,
+      "mtime_ns": 1775297021470898171
+    },
+    "tau/providers/google_provider.py": {
+      "hash": "98b55dc7ff7d18a5da6d7107142002d1fb31ed13880f5cda6756715fba2aadc5",
+      "size": 8981,
+      "mtime_ns": 1778509450500190946
+    },
+    "tau/providers/mlx_provider.py": {
+      "hash": "b289b290a18de0681a62fad318dd3edc1773a8f619e254facc101d35865ce4c6",
+      "size": 34421,
+      "mtime_ns": 1778509450500389655
+    },
+    "tau/providers/ollama_provider.py": {
+      "hash": "87eae165e152645eb25afa3dac1a567f45048105e22e527bed431d6f6cc2af41",
+      "size": 9670,
+      "mtime_ns": 1778509450500632698
+    },
+    "tau/providers/openai_provider.py": {
+      "hash": "0126b3f684067de18bd33c7bbb21e0e1d30be9f76eac6525f0029c2b215924ef",
+      "size": 8453,
+      "mtime_ns": 1778509450500975783
+    },
+    "tau/providers/unsloth_provider.py": {
+      "hash": "07ca15b556cb13b6018ad1257a2d642ffaa77da959a46592a4020de2ac9a84ef",
+      "size": 18294,
+      "mtime_ns": 1779616253550452686
+    },
+    "tau/rpc.py": {
+      "hash": "def426acf658f0da8fc32f585750d4e356e464819b04a06d3979bc133f1d55ab",
+      "size": 5051,
+      "mtime_ns": 1775297021471550006
+    },
+    "tau/sdk.py": {
+      "hash": "2cdae3a67a07a4aac61df7ccb35c990d935420dbe918082fa32d9a2124a63f0d",
+      "size": 13441,
+      "mtime_ns": 1778509543405891109
+    },
+    "tau/skills/__init__.py": {
+      "hash": "297cdc38c562bbf19fd2bc2f651d84385b69b21ea0ab09408e43a3b6a19584a6",
+      "size": 4757,
+      "mtime_ns": 1775297021471814131
+    },
+    "tau/skills/example_skill/__init__.py": {
+      "hash": "883f7d1ec99c769c9de7478efc4e4c93804d6ab9021294a91b4608c46a051827",
+      "size": 477,
+      "mtime_ns": 1775297021472020257
+    },
+    "tau/skills/example_skill/skill.yaml": {
+      "hash": "c22a935f4bdc867eedf84f1598e2ab28950e54145b32c33c85171a9214dbd477",
+      "size": 222,
+      "mtime_ns": 1775297021472097590
+    },
+    "tau/tools/__init__.py": {
+      "hash": "13b83186c359222b795d9fa317f3d6571f7d396557af368d9a33630982b430da",
+      "size": 292,
+      "mtime_ns": 1775297021472211340
+    },
+    "tau/tools/fs.py": {
+      "hash": "aa4b2f6418014fa3c2b9947df6e88f94606a1d3cffae2e1dc556f11a26a00f0c",
+      "size": 21773,
+      "mtime_ns": 1779618436048432849
+    },
+    "tau/tools/shell.py": {
+      "hash": "53981099cf28c42456818ae9b298fb70d74016553ff7c6b72f22911003a58d94",
+      "size": 9610,
+      "mtime_ns": 1779616259130620940
+    },
+    "test_scroll.py": {
+      "hash": "dd40d9e770c06cfc30e630f6c763aa6424ed5a2df528ad2f24bd42e29ef439a7",
+      "size": 1108,
+      "mtime_ns": 1775297021472533591
+    },
+    "test_scroll_x.py": {
+      "hash": "12ac416a817849c2b9171b99f914781a539b42cc10966075214f47ebdc996abb",
+      "size": 648,
+      "mtime_ns": 1775297021472599716
+    },
+    "tests/__init__.py": {
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "mtime_ns": 1775297021472667633
+    },
+    "tests/test_agent.py": {
+      "hash": "0fcda209189b73ce1596b54efa3a70103b57535877cd492eb046d4282da61110",
+      "size": 25559,
+      "mtime_ns": 1778509450501741661
+    },
+    "tests/test_agent_p1_wiring.py": {
+      "hash": "18d675a3ab468b51ed928ded6058a6c1dbaf74a4814b5ae9ab62cd63db159eb9",
+      "size": 5626,
+      "mtime_ns": 1778509450502132288
+    },
+    "tests/test_architecture_boundaries.py": {
+      "hash": "4ad693a7e14e9ee794066da12539f8243a117ea5d8738bcf91e3fecf7eb7d0f8",
+      "size": 2428,
+      "mtime_ns": 1778509450502266455
+    },
+    "tests/test_at_file_cli.py": {
+      "hash": "c9756eb9ba1c2464f8fa8ca752c57fe9354df85f496aa0b2f80f824b7d6d7340",
+      "size": 6330,
+      "mtime_ns": 1775297021472897509
+    },
+    "tests/test_chunker.py": {
+      "hash": "bd61cb44ae2953698987d888555add11fb52b137a2cbb0ac4eefcbaa78ac6477",
+      "size": 2733,
+      "mtime_ns": 1778509741744669252
+    },
+    "tests/test_code_index.py": {
+      "hash": "daedfab4d4b557a1d1e035abfca89c2c3c27690ca609474baf55e94f477b795c",
+      "size": 3009,
+      "mtime_ns": 1779616253550705437
+    },
+    "tests/test_code_index_flag.py": {
+      "hash": "bf4a0ce5ef3cea7f57545cb2df07bd7ad3bce67f9cb9c17f88079821bfd99f93",
+      "size": 430,
+      "mtime_ns": 1778509543406462487
+    },
+    "tests/test_compaction.py": {
+      "hash": "d28d5f62918607b9d68046c25f9a9fc661f2085564457fff8404113f56f5175b",
+      "size": 20365,
+      "mtime_ns": 1775297021472986175
+    },
+    "tests/test_context.py": {
+      "hash": "a8879e6ad0bbda8d1ce97a0e5bbf2b36c8ed8dd0fbbd0c22f35376600df8786a",
+      "size": 8733,
+      "mtime_ns": 1779616829004483510
+    },
+    "tests/test_context_files.py": {
+      "hash": "ec5b2a62790231c09579258acb6f9e652f9a594151431fe6591f752b84a99fd7",
+      "size": 11275,
+      "mtime_ns": 1775297021473257468
+    },
+    "tests/test_credential_pool.py": {
+      "hash": "cce9ab44b25f59a1afb8d65de4aeae5cbbcd89743e0522490ad741a61cce50cb",
+      "size": 7109,
+      "mtime_ns": 1778509450502549623
+    },
+    "tests/test_e2e_mocked_provider.py": {
+      "hash": "72395bd97c89e8ec95dd69ca4af349027f013a4003b59a8e92ef77381b3bcb0f",
+      "size": 6072,
+      "mtime_ns": 1778509450502669916
+    },
+    "tests/test_editor.py": {
+      "hash": "781488a457571492b5442fab298723dd1d0d797f42379a4c0ab62c3f023cf655",
+      "size": 10197,
+      "mtime_ns": 1775297021473386676
+    },
+    "tests/test_extensions.py": {
+      "hash": "6a3ddc212b6f6248a373301427a55b6b97bab83ee623289ca5f6b3731daa2891",
+      "size": 35700,
+      "mtime_ns": 1779616253551478149
+    },
+    "tests/test_fs_tools.py": {
+      "hash": "14cfc5c341c346a79354a84f2810f756e90f43e7788f22b7af8a60757bc458c0",
+      "size": 9275,
+      "mtime_ns": 1779618442169298693
+    },
+    "tests/test_google_provider.py": {
+      "hash": "7fa8c5c88ee924167e0d2f4a73ca3130289ccbb47fd59642fdec021fcd1f9ff3",
+      "size": 1229,
+      "mtime_ns": 1778509450502787333
+    },
+    "tests/test_hooks.py": {
+      "hash": "9269fa7ecdf2dadf272de389e91f6d4b2ddffed6c2ca64ad8ebf53149d2a6fdf",
+      "size": 3184,
+      "mtime_ns": 1779616253551699692
+    },
+    "tests/test_max_cost.py": {
+      "hash": "410406c877a4fefa8dbef12afc7aa9170d4bbf74b28244c65f25738b341a031e",
+      "size": 16374,
+      "mtime_ns": 1778509450502966625
+    },
+    "tests/test_mcp_resources_extension.py": {
+      "hash": "b6ce645e6d9bf3431d2a7b9602f8f616c1dc87972807ebaf1d971fbb7ecc8419",
+      "size": 4922,
+      "mtime_ns": 1778509543406918530
+    },
+    "tests/test_model_metadata.py": {
+      "hash": "b2e25ef9a99d826b6fcbe6fd3c2f031bf83c8d44236164f3588583c38b266537",
+      "size": 4476,
+      "mtime_ns": 1778509450503093001
+    },
+    "tests/test_output_modes.py": {
+      "hash": "dd8c54831849bad776748554f635b671eb80c3549a6b278823944d96352f0523",
+      "size": 10797,
+      "mtime_ns": 1775297021473913928
+    },
+    "tests/test_packages.py": {
+      "hash": "5c209a668ae26d2cb49e1330e54c704bc1ca28cedec67d01aee925aa836a617b",
+      "size": 24428,
+      "mtime_ns": 1775297021474013386
+    },
+    "tests/test_policy.py": {
+      "hash": "4a8298252ef28e5b067a8e489ecf90921496c27af0699ca1251c2f15d5c6ea32",
+      "size": 4578,
+      "mtime_ns": 1779616259131039401
+    },
+    "tests/test_prompt_caching.py": {
+      "hash": "97a3262e9227a9e8ad6cc641f497f7562a7277d354d419af62871b759938e917",
+      "size": 4334,
+      "mtime_ns": 1778509450503601545
+    },
+    "tests/test_prompts.py": {
+      "hash": "f852c3b498f6cd34824018855bd9bac83e9090d31d9a7ebda408ed1b32e52491",
+      "size": 8284,
+      "mtime_ns": 1775297021474142761
+    },
+    "tests/test_provider_factory.py": {
+      "hash": "1a7fe92dfd30aaaba186bfd591f1f71e39f3ea16b00aba92784f90a75f91467a",
+      "size": 1660,
+      "mtime_ns": 1778509543407092364
+    },
+    "tests/test_rate_limit_tracker.py": {
+      "hash": "ff4bd7de44a2337dcd29b6c030b75b951d4614261968bc5b9a0050291de50782",
+      "size": 4535,
+      "mtime_ns": 1778509450503765629
+    },
+    "tests/test_rehydrate.py": {
+      "hash": "24ee17991a4a6b729364e6c5d6ca7a10b690e2ce82a012ddcde58024d37e2d45",
+      "size": 2150,
+      "mtime_ns": 1779616253551947359
+    },
+    "tests/test_retrieval_mode.py": {
+      "hash": "311cf0294524e49644376843aeca669a4e8e7642bfb1593c19c436cd4a01a901",
+      "size": 554,
+      "mtime_ns": 1778509741745321130
+    },
+    "tests/test_retry.py": {
+      "hash": "d274bf4deabcefbf5ea6a9ddb9eee6eaf4a33109e06c1b676b472cea5677a800",
+      "size": 10135,
+      "mtime_ns": 1775297021474254095
+    },
+    "tests/test_sdk_rpc.py": {
+      "hash": "456dd4074ae4112bd0154a91b99397fa123031d10d5eff666de21ba134cce86a",
+      "size": 19075,
+      "mtime_ns": 1775297021474339137
+    },
+    "tests/test_session.py": {
+      "hash": "4f3a89fc7d6f37e012c23dfeffbcda77ece4f5edf61dce5e103c0ac108eca46a",
+      "size": 16797,
+      "mtime_ns": 1775297021474443220
+    },
+    "tests/test_share.py": {
+      "hash": "d026c453934d3caea4d1b208943df81c17f468e1efb1965488ea43ca41d62092",
+      "size": 8739,
+      "mtime_ns": 1775297021474567137
+    },
+    "tests/test_slash_commands.py": {
+      "hash": "a017be91774ed2ec20bfcd99dbf4a1cb24d1c2d50455973de7d55ff9827a1c7c",
+      "size": 32231,
+      "mtime_ns": 1778509543407336157
+    },
+    "tests/test_smart_routing.py": {
+      "hash": "62e7874a996d1a4e92f9047bdfa2f86bcfe1ee4cb5f35a05ace2b60183d654cd",
+      "size": 3590,
+      "mtime_ns": 1778509450504151631
+    },
+    "tests/test_state.py": {
+      "hash": "5399a05dd75e74ea3f8721929f42265d8d748c25b4cc6d37491495ef10105bab",
+      "size": 12155,
+      "mtime_ns": 1778509450504349382
+    },
+    "tests/test_steering.py": {
+      "hash": "dc1f0993291cff839907a36cb2c69bfaf169cd53dcb1935322304f1f6e7dda56",
+      "size": 22195,
+      "mtime_ns": 1775297021474761221
+    },
+    "tests/test_task_planner_extension.py": {
+      "hash": "6077acc9d7ee2a3f042c4ff9e2a9a497b198f1035cd6f635d6f1dd719431906e",
+      "size": 2834,
+      "mtime_ns": 1778509543407481158
+    },
+    "tests/test_theme_and_tools_config.py": {
+      "hash": "572498185a9f6d4126b67ca0a4e78ce396646e474f8e35c0e717ce16cd100435",
+      "size": 16842,
+      "mtime_ns": 1778509450504559633
+    },
+    "tests/test_tool_registry.py": {
+      "hash": "90362e3199cf7318f6d3ce6ec39b9c8771c8d1e4d66a96bda208ec937a325884",
+      "size": 2065,
+      "mtime_ns": 1775297021474925221
+    },
+    "tests/test_unsloth_provider.py": {
+      "hash": "14bfe007750cd6db09c115691b77927cbb430a5e87016fb28382ae97d46b3b05",
+      "size": 1738,
+      "mtime_ns": 1778509450504803800
+    },
+    "tests/test_usage_pricing.py": {
+      "hash": "f131e118c4be7b6826a7ba2018ae1f51702053006854a321ffacb4bb46777ccc",
+      "size": 5177,
+      "mtime_ns": 1778509450504969885
+    },
+    "verify_shell.py": {
+      "hash": "69737c61e24f578cb3d6391b2d9ed5508b96857ab75cb64f2c891dff7c8b255d",
+      "size": 1199,
+      "mtime_ns": 1775297021474989097
+    }
+  },
+  "tree": {
+    "kind": "dir",
+    "hash": "da974e17b94ed231fb47ef4d212ce15955e32a77609af518572f9ad9daef446e",
+    "children": {
+      ".github": {
+        "kind": "dir",
+        "hash": "8e8299cc6bb6e6d72501a2946542415fa4e77bf66cb711b9422e0e871d1502ee",
+        "children": {
+          "workflows": {
+            "kind": "dir",
+            "hash": "cfe452b01c947a9d1465b9cb2d38da22107407128c6fa5dba780e918024af2e8",
+            "children": {
+              "core-architecture.yml": {
+                "kind": "file",
+                "hash": "ed76dc6bd1b03f9b0834215d1904d5b7b7cb81f6aaf07cc6a47657cb2f9195b9"
+              }
+            }
+          }
+        }
+      },
+      ".gitignore": {
+        "kind": "file",
+        "hash": "45c8b4bdc711102c6d297fae7ad9cbdc209653a982a142c7ea163883f0ea32c4"
+      },
+      "DESIGN.md": {
+        "kind": "file",
+        "hash": "a0867a2b21e3da0b3c41379d267ef84604b212d950ef2ad1d9cf5c593385e38b"
+      },
+      "NOTE.md": {
+        "kind": "file",
+        "hash": "961bd9fdff0ce64ef454839045800b6d708b20820ae094340f314641ab98de81"
+      },
+      "README.md": {
+        "kind": "file",
+        "hash": "7cd99f743087d1fc3a4b5158ee73ffe68789be4cdffe058357dcaccd2ec2d3cd"
+      },
+      "REVIEW_CHECKLIST.md": {
+        "kind": "file",
+        "hash": "b6615697feefb425bfa1ce0da9663118309f2f433feb02a804a15939f5fc0de9"
+      },
+      "RUN.md": {
+        "kind": "file",
+        "hash": "67c9240f72a413a988e741385effd313f777e17bf40cdff97bf29525caf0a86c"
+      },
+      "debug.py": {
+        "kind": "file",
+        "hash": "f2a07521c36ba5878047f74f2baf499bb9349a01f6208ebba7ae8ebd7ad2519f"
+      },
+      "pyproject.toml": {
+        "kind": "file",
+        "hash": "ae9a80a8be0d7f381c43d242fe7422351b87c87cbd653315499cecad8ca6dc0c"
+      },
+      "tau": {
+        "kind": "dir",
+        "hash": "643c3e631ed49070cf73b5e99c1500d731b00c4aaf4364a8e6a0efd623f37d62",
+        "children": {
+          "__init__.py": {
+            "kind": "file",
+            "hash": "d019321bb504857e0d269d613cdb5106698fd340c0e531ab34dcb620504d9876"
+          },
+          "cli.py": {
+            "kind": "file",
+            "hash": "31d24cf371aac4abb39fa826b37866ccb8cceece590b9427e5a00511cdaed20c"
+          },
+          "cli_bootstrap.py": {
+            "kind": "file",
+            "hash": "643dbf4fc7133952a16b7e88df34b712078ec10a29eb6ee088ff9bef9584804a"
+          },
+          "cli_ui.py": {
+            "kind": "file",
+            "hash": "76198839fbca02ef3f20043b793cf28fb0b1cf73d4bf828282340bc934b629f5"
+          },
+          "config.py": {
+            "kind": "file",
+            "hash": "f963dba7d706474f26262c94bc0f24c085204d591caab557fa02650682934a60"
+          },
+          "context_files.py": {
+            "kind": "file",
+            "hash": "fa4e524d4d219236bbc446a94c55303518abf4f7662fa6df805c44da787d9226"
+          },
+          "core": {
+            "kind": "dir",
+            "hash": "66d4198929e16e409e98bed439c35e52380b4c98dab2d51d4b88546347587367",
+            "children": {
+              "__init__.py": {
+                "kind": "file",
+                "hash": "ebd8c61e17dbd07b3865fea41c12d2ca7c192572c71955382c715ac234c928f0"
+              },
+              "agent.py": {
+                "kind": "file",
+                "hash": "7632fcf308c7594901f5fcf70fd1635da849f10cbf3eb8449a5048a87751455d"
+              },
+              "assistant_events.py": {
+                "kind": "file",
+                "hash": "9d5ebb257fdc03d1f57221746658c6c8b1391c37b14b7c3e22e125c8440aa67a"
+              },
+              "audit.py": {
+                "kind": "file",
+                "hash": "7c4545c8a53ec57defcaf896a96cdeac8e875f1a7bd554e30949a7203c32bf75"
+              },
+              "capabilities.py": {
+                "kind": "file",
+                "hash": "cc1d3e9ce5a8146046499b914adcdde0cbc6d91884f321cf8e6332acc86fea19"
+              },
+              "chunker.py": {
+                "kind": "file",
+                "hash": "b8921195f118a1fa265b6e1125090d56cf19b36675be48e54f56ecab014bd4f5"
+              },
+              "code_index.py": {
+                "kind": "file",
+                "hash": "4ca6d10ea21fe2ff9fb76dda437d0038b6666c1b1699bf2f80e9c784520aaf63"
+              },
+              "context.py": {
+                "kind": "file",
+                "hash": "52dec26026f6345b61aba6714c027007b7ed08a5386102ec0b7bbab1584430b0"
+              },
+              "credential_pool.py": {
+                "kind": "file",
+                "hash": "f9a08df46316bfe43cca496fb8981a1109228b2e2a366967d2cd293f69845104"
+              },
+              "extension.py": {
+                "kind": "file",
+                "hash": "ab17f645cb645ec76dfcb0b38bb6fb2cf42579f637012dd0855f677e4231a700"
+              },
+              "model_metadata.py": {
+                "kind": "file",
+                "hash": "85cfe3821a0df38ef48b74365feacaf04f5c66bb9a76ea6cd1449b7564ddf1c3"
+              },
+              "policy.py": {
+                "kind": "file",
+                "hash": "ccbc191d9a17a1fee78cdba7ae575dcee316faffa1ce66a4ce010b1c800cd05b"
+              },
+              "prompt_builder.py": {
+                "kind": "file",
+                "hash": "64bc90eacd641460703c79d8b099a4d8dfdb99a0003db71771d74b2045becfaa"
+              },
+              "prompt_caching.py": {
+                "kind": "file",
+                "hash": "4334c92b609297f2fc92c6c8438ea063abf82e8726126954d5d8df9e3db7a29f"
+              },
+              "prompt_layers.py": {
+                "kind": "file",
+                "hash": "a43155978f9383ff72bc5d727c080232483cc8fbcc8ae5a320dd1c1a722887ea"
+              },
+              "rate_limit_tracker.py": {
+                "kind": "file",
+                "hash": "3c6e4c62f33822340f1d6ea5a986ce520d4785ab8e11b25dcfb931ef71057c7d"
+              },
+              "rehydrate.py": {
+                "kind": "file",
+                "hash": "768886b1e02afb12f60dcc40d2bafb42bbabcdba1977982ef31819f42682d856"
+              },
+              "retrieval_mode.py": {
+                "kind": "file",
+                "hash": "042a5e9bc0baea71756b6c803de93c53f2b84cfd1a9fe417e4c3929a3727de45"
+              },
+              "session.py": {
+                "kind": "file",
+                "hash": "b29844b3fef07373d556984afc460910d5f97a28caa97ebae4ce6493a60a6bb9"
+              },
+              "smart_routing.py": {
+                "kind": "file",
+                "hash": "249444642bddc610ec5522cc9173c846d551e12db85f316298abd5f28423567b"
+              },
+              "state.py": {
+                "kind": "file",
+                "hash": "28feb78bdaadfea9a5b25779e9aa09354a8ff4f0a12835b1375e6a601c35e1db"
+              },
+              "steering.py": {
+                "kind": "file",
+                "hash": "52928f74c25ba827e2553ea2998c4f40cda908fe82b542dfca35bae8f309fd6a"
+              },
+              "subdirectory_hints.py": {
+                "kind": "file",
+                "hash": "4ecab4796f7bdc80ec22e0460795d50fe05df13a852c446172cf12d8f3b2a630"
+              },
+              "tool_registry.py": {
+                "kind": "file",
+                "hash": "1d3f8c54b264a0e55b9b87a2e2c7faa4e662a6e4fad7d2aa16ebec0bc97c54f8"
+              },
+              "tool_runtime.py": {
+                "kind": "file",
+                "hash": "ed881296f7bffacaecd9eb2e1257d06a3ab7115e659d46c41da1a1e0e08a3147"
+              },
+              "trace.py": {
+                "kind": "file",
+                "hash": "bc09ca0eb7ee6e22c316ed185136a6cfbbeba50df686089fbbe804dfa09893a4"
+              },
+              "types.py": {
+                "kind": "file",
+                "hash": "21d538649d117e4ad6a756ff8a747e7b16c6a4f921bd066ad566b8a9fbe98858"
+              },
+              "usage_pricing.py": {
+                "kind": "file",
+                "hash": "4ecd038851f29ec2539e43cd5894d03a2725847722d9c08155370dda440c7bdd"
+              }
+            }
+          },
+          "editor.py": {
+            "kind": "file",
+            "hash": "062fa79a83d0907bfa9b536f91b8337e44ec5604361826379b4dca07dd903989"
+          },
+          "extensions": {
+            "kind": "dir",
+            "hash": "4bbe597ac8285d48f74d6f6b8132df814923ad863f5022ff5f1308b0247aee5a",
+            "children": {
+              "__init__.py": {
+                "kind": "file",
+                "hash": "6b8e344361c12aba5e2f775cd1403aa5f12081722a91b3166a315b7dec343c37"
+              },
+              "mcp_resources.py": {
+                "kind": "file",
+                "hash": "5bd5cc64c2d4f8b5d41b28c216e5e1de4c8259de4cb02526a5773db0ee9e8516"
+              },
+              "pretty_json.py": {
+                "kind": "file",
+                "hash": "9385845ceac2d8b4d18f972f120009bf9a90fed794a53c3f3efa6f2560bc2be1"
+              },
+              "task_planner.py": {
+                "kind": "file",
+                "hash": "09bf598cd09c32f3c21d36e60986c6bafd128115a18147f35fe14f3f1223d640"
+              },
+              "word_count.py": {
+                "kind": "file",
+                "hash": "92f7abb6d71997b7cedfe2e90d4b5a0de91110b68539b8c4f2a6b039e1626135"
+              }
+            }
+          },
+          "packages.py": {
+            "kind": "file",
+            "hash": "d726219d677279139ccc7d98b78827fc109792d7c7ca331028e1cf5eb96d1c14"
+          },
+          "prompts.py": {
+            "kind": "file",
+            "hash": "934e3e1b60fa720904b170344506c1059ca706689170b24de47fb63661273a6a"
+          },
+          "providers": {
+            "kind": "dir",
+            "hash": "5a98584811906e128e20dffb603c4968182cf9501b5c5e4d22adb3abadd791cd",
+            "children": {
+              "__init__.py": {
+                "kind": "file",
+                "hash": "a1722305ecff847a3223207a18da5fe9a8ef3784dbd846ec23816c800aa5d529"
+              },
+              "anthropic_provider.py": {
+                "kind": "file",
+                "hash": "3ba73d62d5cf8c4733899c1a28eba7063eb4f4d7640667a3adecc329094469d7"
+              },
+              "base.py": {
+                "kind": "file",
+                "hash": "54e57bbfa7657c6d1d6feeb66df82e3ffd014d485af4dd3982922634ba4d25ca"
+              },
+              "google_provider.py": {
+                "kind": "file",
+                "hash": "98b55dc7ff7d18a5da6d7107142002d1fb31ed13880f5cda6756715fba2aadc5"
+              },
+              "mlx_provider.py": {
+                "kind": "file",
+                "hash": "b289b290a18de0681a62fad318dd3edc1773a8f619e254facc101d35865ce4c6"
+              },
+              "ollama_provider.py": {
+                "kind": "file",
+                "hash": "87eae165e152645eb25afa3dac1a567f45048105e22e527bed431d6f6cc2af41"
+              },
+              "openai_provider.py": {
+                "kind": "file",
+                "hash": "0126b3f684067de18bd33c7bbb21e0e1d30be9f76eac6525f0029c2b215924ef"
+              },
+              "unsloth_provider.py": {
+                "kind": "file",
+                "hash": "07ca15b556cb13b6018ad1257a2d642ffaa77da959a46592a4020de2ac9a84ef"
+              }
+            }
+          },
+          "rpc.py": {
+            "kind": "file",
+            "hash": "def426acf658f0da8fc32f585750d4e356e464819b04a06d3979bc133f1d55ab"
+          },
+          "sdk.py": {
+            "kind": "file",
+            "hash": "2cdae3a67a07a4aac61df7ccb35c990d935420dbe918082fa32d9a2124a63f0d"
+          },
+          "skills": {
+            "kind": "dir",
+            "hash": "86a6b8ea91cad77dde0b2097d533244fb0581dc32b5a1979186b95426278614f",
+            "children": {
+              "__init__.py": {
+                "kind": "file",
+                "hash": "297cdc38c562bbf19fd2bc2f651d84385b69b21ea0ab09408e43a3b6a19584a6"
+              },
+              "example_skill": {
+                "kind": "dir",
+                "hash": "811d439d651112c80b1292d88bb99e3bdf3ebc742ecb4a0db9a84cc5fc2edab3",
+                "children": {
+                  "__init__.py": {
+                    "kind": "file",
+                    "hash": "883f7d1ec99c769c9de7478efc4e4c93804d6ab9021294a91b4608c46a051827"
+                  },
+                  "skill.yaml": {
+                    "kind": "file",
+                    "hash": "c22a935f4bdc867eedf84f1598e2ab28950e54145b32c33c85171a9214dbd477"
+                  }
+                }
+              }
+            }
+          },
+          "tools": {
+            "kind": "dir",
+            "hash": "e858ad5faa4b2bb8bfce5f774bd1b7ea80e1e6b696676469a085869a56407aac",
+            "children": {
+              "__init__.py": {
+                "kind": "file",
+                "hash": "13b83186c359222b795d9fa317f3d6571f7d396557af368d9a33630982b430da"
+              },
+              "fs.py": {
+                "kind": "file",
+                "hash": "aa4b2f6418014fa3c2b9947df6e88f94606a1d3cffae2e1dc556f11a26a00f0c"
+              },
+              "shell.py": {
+                "kind": "file",
+                "hash": "53981099cf28c42456818ae9b298fb70d74016553ff7c6b72f22911003a58d94"
+              }
+            }
+          }
+        }
+      },
+      "test_scroll.py": {
+        "kind": "file",
+        "hash": "dd40d9e770c06cfc30e630f6c763aa6424ed5a2df528ad2f24bd42e29ef439a7"
+      },
+      "test_scroll_x.py": {
+        "kind": "file",
+        "hash": "12ac416a817849c2b9171b99f914781a539b42cc10966075214f47ebdc996abb"
+      },
+      "tests": {
+        "kind": "dir",
+        "hash": "2c15e46cb2432d7a838afb4992539fc9fe5b9c573a6163bc220b6c9002b01261",
+        "children": {
+          "__init__.py": {
+            "kind": "file",
+            "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "test_agent.py": {
+            "kind": "file",
+            "hash": "0fcda209189b73ce1596b54efa3a70103b57535877cd492eb046d4282da61110"
+          },
+          "test_agent_p1_wiring.py": {
+            "kind": "file",
+            "hash": "18d675a3ab468b51ed928ded6058a6c1dbaf74a4814b5ae9ab62cd63db159eb9"
+          },
+          "test_architecture_boundaries.py": {
+            "kind": "file",
+            "hash": "4ad693a7e14e9ee794066da12539f8243a117ea5d8738bcf91e3fecf7eb7d0f8"
+          },
+          "test_at_file_cli.py": {
+            "kind": "file",
+            "hash": "c9756eb9ba1c2464f8fa8ca752c57fe9354df85f496aa0b2f80f824b7d6d7340"
+          },
+          "test_chunker.py": {
+            "kind": "file",
+            "hash": "bd61cb44ae2953698987d888555add11fb52b137a2cbb0ac4eefcbaa78ac6477"
+          },
+          "test_code_index.py": {
+            "kind": "file",
+            "hash": "daedfab4d4b557a1d1e035abfca89c2c3c27690ca609474baf55e94f477b795c"
+          },
+          "test_code_index_flag.py": {
+            "kind": "file",
+            "hash": "bf4a0ce5ef3cea7f57545cb2df07bd7ad3bce67f9cb9c17f88079821bfd99f93"
+          },
+          "test_compaction.py": {
+            "kind": "file",
+            "hash": "d28d5f62918607b9d68046c25f9a9fc661f2085564457fff8404113f56f5175b"
+          },
+          "test_context.py": {
+            "kind": "file",
+            "hash": "a8879e6ad0bbda8d1ce97a0e5bbf2b36c8ed8dd0fbbd0c22f35376600df8786a"
+          },
+          "test_context_files.py": {
+            "kind": "file",
+            "hash": "ec5b2a62790231c09579258acb6f9e652f9a594151431fe6591f752b84a99fd7"
+          },
+          "test_credential_pool.py": {
+            "kind": "file",
+            "hash": "cce9ab44b25f59a1afb8d65de4aeae5cbbcd89743e0522490ad741a61cce50cb"
+          },
+          "test_e2e_mocked_provider.py": {
+            "kind": "file",
+            "hash": "72395bd97c89e8ec95dd69ca4af349027f013a4003b59a8e92ef77381b3bcb0f"
+          },
+          "test_editor.py": {
+            "kind": "file",
+            "hash": "781488a457571492b5442fab298723dd1d0d797f42379a4c0ab62c3f023cf655"
+          },
+          "test_extensions.py": {
+            "kind": "file",
+            "hash": "6a3ddc212b6f6248a373301427a55b6b97bab83ee623289ca5f6b3731daa2891"
+          },
+          "test_fs_tools.py": {
+            "kind": "file",
+            "hash": "14cfc5c341c346a79354a84f2810f756e90f43e7788f22b7af8a60757bc458c0"
+          },
+          "test_google_provider.py": {
+            "kind": "file",
+            "hash": "7fa8c5c88ee924167e0d2f4a73ca3130289ccbb47fd59642fdec021fcd1f9ff3"
+          },
+          "test_hooks.py": {
+            "kind": "file",
+            "hash": "9269fa7ecdf2dadf272de389e91f6d4b2ddffed6c2ca64ad8ebf53149d2a6fdf"
+          },
+          "test_max_cost.py": {
+            "kind": "file",
+            "hash": "410406c877a4fefa8dbef12afc7aa9170d4bbf74b28244c65f25738b341a031e"
+          },
+          "test_mcp_resources_extension.py": {
+            "kind": "file",
+            "hash": "b6ce645e6d9bf3431d2a7b9602f8f616c1dc87972807ebaf1d971fbb7ecc8419"
+          },
+          "test_model_metadata.py": {
+            "kind": "file",
+            "hash": "b2e25ef9a99d826b6fcbe6fd3c2f031bf83c8d44236164f3588583c38b266537"
+          },
+          "test_output_modes.py": {
+            "kind": "file",
+            "hash": "dd8c54831849bad776748554f635b671eb80c3549a6b278823944d96352f0523"
+          },
+          "test_packages.py": {
+            "kind": "file",
+            "hash": "5c209a668ae26d2cb49e1330e54c704bc1ca28cedec67d01aee925aa836a617b"
+          },
+          "test_policy.py": {
+            "kind": "file",
+            "hash": "4a8298252ef28e5b067a8e489ecf90921496c27af0699ca1251c2f15d5c6ea32"
+          },
+          "test_prompt_caching.py": {
+            "kind": "file",
+            "hash": "97a3262e9227a9e8ad6cc641f497f7562a7277d354d419af62871b759938e917"
+          },
+          "test_prompts.py": {
+            "kind": "file",
+            "hash": "f852c3b498f6cd34824018855bd9bac83e9090d31d9a7ebda408ed1b32e52491"
+          },
+          "test_provider_factory.py": {
+            "kind": "file",
+            "hash": "1a7fe92dfd30aaaba186bfd591f1f71e39f3ea16b00aba92784f90a75f91467a"
+          },
+          "test_rate_limit_tracker.py": {
+            "kind": "file",
+            "hash": "ff4bd7de44a2337dcd29b6c030b75b951d4614261968bc5b9a0050291de50782"
+          },
+          "test_rehydrate.py": {
+            "kind": "file",
+            "hash": "24ee17991a4a6b729364e6c5d6ca7a10b690e2ce82a012ddcde58024d37e2d45"
+          },
+          "test_retrieval_mode.py": {
+            "kind": "file",
+            "hash": "311cf0294524e49644376843aeca669a4e8e7642bfb1593c19c436cd4a01a901"
+          },
+          "test_retry.py": {
+            "kind": "file",
+            "hash": "d274bf4deabcefbf5ea6a9ddb9eee6eaf4a33109e06c1b676b472cea5677a800"
+          },
+          "test_sdk_rpc.py": {
+            "kind": "file",
+            "hash": "456dd4074ae4112bd0154a91b99397fa123031d10d5eff666de21ba134cce86a"
+          },
+          "test_session.py": {
+            "kind": "file",
+            "hash": "4f3a89fc7d6f37e012c23dfeffbcda77ece4f5edf61dce5e103c0ac108eca46a"
+          },
+          "test_share.py": {
+            "kind": "file",
+            "hash": "d026c453934d3caea4d1b208943df81c17f468e1efb1965488ea43ca41d62092"
+          },
+          "test_slash_commands.py": {
+            "kind": "file",
+            "hash": "a017be91774ed2ec20bfcd99dbf4a1cb24d1c2d50455973de7d55ff9827a1c7c"
+          },
+          "test_smart_routing.py": {
+            "kind": "file",
+            "hash": "62e7874a996d1a4e92f9047bdfa2f86bcfe1ee4cb5f35a05ace2b60183d654cd"
+          },
+          "test_state.py": {
+            "kind": "file",
+            "hash": "5399a05dd75e74ea3f8721929f42265d8d748c25b4cc6d37491495ef10105bab"
+          },
+          "test_steering.py": {
+            "kind": "file",
+            "hash": "dc1f0993291cff839907a36cb2c69bfaf169cd53dcb1935322304f1f6e7dda56"
+          },
+          "test_task_planner_extension.py": {
+            "kind": "file",
+            "hash": "6077acc9d7ee2a3f042c4ff9e2a9a497b198f1035cd6f635d6f1dd719431906e"
+          },
+          "test_theme_and_tools_config.py": {
+            "kind": "file",
+            "hash": "572498185a9f6d4126b67ca0a4e78ce396646e474f8e35c0e717ce16cd100435"
+          },
+          "test_tool_registry.py": {
+            "kind": "file",
+            "hash": "90362e3199cf7318f6d3ce6ec39b9c8771c8d1e4d66a96bda208ec937a325884"
+          },
+          "test_unsloth_provider.py": {
+            "kind": "file",
+            "hash": "14bfe007750cd6db09c115691b77927cbb430a5e87016fb28382ae97d46b3b05"
+          },
+          "test_usage_pricing.py": {
+            "kind": "file",
+            "hash": "f131e118c4be7b6826a7ba2018ae1f51702053006854a321ffacb4bb46777ccc"
+          }
+        }
+      },
+      "verify_shell.py": {
+        "kind": "file",
+        "hash": "69737c61e24f578cb3d6391b2d9ed5508b96857ab75cb64f2c891dff7c8b255d"
+      }
+    }
+  }
+}

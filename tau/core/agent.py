@@ -302,7 +302,10 @@ class Agent:
                     results[idx] = future.result()
                 except Exception as exc:  # noqa: BLE001
                     call = calls[idx]
-                    logger.exception("Parallel dispatch error for tool %r", call.name)
+                    if isinstance(exc, (FileNotFoundError, NotADirectoryError, IsADirectoryError, PermissionError, ValueError)):
+                        logger.debug("Tool dispatch domain error for %r: %s", call.name, exc)
+                    else:
+                        logger.exception("Parallel dispatch error for tool %r", call.name)
                     results[idx] = ToolResult(
                         tool_call_id=call.id,
                         content=f"Error in tool {call.name!r}: {exc}",
@@ -544,6 +547,11 @@ class Agent:
 
                             approved = bool(self._policy_approval_hook(reason))
                             if approved:
+                                if call.name == "run_bash":
+                                    cmd = call.arguments.get("command")
+                                    if isinstance(cmd, str):
+                                        from tau.tools.shell import mark_command_policy_approved
+                                        mark_command_policy_approved(cmd)
                                 yield PolicyDecisionEvent(
                                     action=call.name,
                                     decision="approved",
@@ -705,6 +713,9 @@ class Agent:
                     tool_call_id=result.tool_call_id,
                     name=call.name,
                 ))
+
+            from tau.tools.shell import clear_policy_approved_commands
+            clear_policy_approved_commands()
 
             # Fast-path: when any `agent` tool call in this batch spawns a
             # background task, tool outputs are already user-ready. Skip the

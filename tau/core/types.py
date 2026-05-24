@@ -210,6 +210,7 @@ class AgentConfig:
     # --- policy scaffold ---
     policy_enabled: bool = True
     policy_profile: Literal["strict", "balanced", "dev"] = "balanced"
+    approved_risky_actions: bool = False
     # --- optional prompt budget mode ---
     prompt_budget_enabled: bool = False
     prompt_budget_max_input_tokens: int = 3200

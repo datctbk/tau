@@ -454,12 +454,10 @@ class ContextManager:
         )
         self.compactor = Compactor(config)
 
-        # Initialize the dynamic prompt builder.
-        # Scale the budget up to 60% of the window to accommodate rules and memory fragments,
-        # but cap at 80% to ensure some room for conversation history.
+        # Initialize the dynamic prompt builder reserving 20% of the overall window for context
         self.prompt_builder = None
         if config.dynamic_prompt_builder_enabled:
-            budget = min(config.max_tokens * 4 // 5, max(3200, config.max_tokens * 3 // 5))
+            budget = min(config.max_tokens, max(1000, config.max_tokens // 5))
             self.prompt_builder = DynamicPromptBuilder(max_tokens=budget)
 
         # Inject base system prompt
