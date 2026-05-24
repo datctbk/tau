@@ -55,29 +55,10 @@ logger = logging.getLogger(__name__)
 # Error substrings that are safe to retry (transient / server-side).
 # Context-overflow errors are NOT included — those are handled by compaction.
 _RETRYABLE_PATTERNS = (
-    "rate limit",
-    "rate_limit",
-    "too many requests",
-    "429",
-    "overloaded",
-    "overload",
-    "503",
-    "502",
-    "500",
-    "service unavailable",
-    "server error",
-    "internal error",
-    "bad gateway",
-    "timeout",
-    "timed out",
-    "connection error",
-    "connection refused",
-    "network error",
-    "fetch failed",
-    "socket",
-    "reset",
-    "temporarily unavailable",
-    "retry",
+    "rate limit", "rate_limit", "too many requests", "429", "overloaded", "overload",
+    "503", "502", "500", "service unavailable", "server error", "internal error",
+    "bad gateway", "timeout", "timed out", "connection error", "connection refused",
+    "network error", "fetch failed", "socket", "reset", "temporarily unavailable", "retry"
 )
 
 # Sentinels returned by _call_with_retry
@@ -223,6 +204,9 @@ class Agent:
 
     def _attach_rehydrated_context_if_needed(self, messages: list[Message]) -> list[Message]:
         if not self._rehydrate_needed:
+            if self._context.prompt_builder is not None:
+                self._context.prompt_builder.remove_fragment(_REHYDRATE_FRAGMENT_NAME)
+                self._context._update_system_message()  # type: ignore[attr-defined]
             return messages
         if not self._env_bool("TAU_REHYDRATE_AFTER_COMPACTION", True):
             _trace.log_extension_event(
@@ -230,6 +214,9 @@ class Agent:
                 "rehydrate_context",
                 {"triggered": False, "selected_chunks": 0, "chars_used": 0, "reason": "disabled"},
             )
+            if self._context.prompt_builder is not None:
+                self._context.prompt_builder.remove_fragment(_REHYDRATE_FRAGMENT_NAME)
+                self._context._update_system_message()  # type: ignore[attr-defined]
             return messages
 
         query = ""
