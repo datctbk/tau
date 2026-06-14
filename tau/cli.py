@@ -2676,6 +2676,7 @@ def _repl(
             context=agent._context,
             steering=steering,
             console_print=console.print,
+            agent_config=agent_config,
         )
 
     import threading
@@ -3234,15 +3235,25 @@ def _repl(
 
         # new agent turn — expand @file references first
         ws = agent._config.workspace_root
-        expanded, inlined_files = expand_at_files(text, ws)
+        expanded, inlined_files, inlined_images = expand_at_files(text, ws)
         _flush_ext_status()
-        if inlined_files:
-            n = len(inlined_files)
-            names = ", ".join(Path(f).name for f in inlined_files)
+        if inlined_files or inlined_images:
+            n_files = len(inlined_files)
+            n_imgs = len(inlined_images)
+            parts = []
+            if n_files:
+                parts.append(f"{n_files} file{'s' if n_files > 1 else ''}")
+            if n_imgs:
+                parts.append(f"{n_imgs} image{'s' if n_imgs > 1 else ''}")
+            names = ", ".join(Path(f).name for f in (inlined_files + inlined_images))
             _append_output(f"\n{_ansi_fg(theme.accent_color, bold=True)}>{_RESET} {text}\n")
-            _append_output(f"{_ansi_fg(theme.system_color, dim=True)}  📎 {n} file{'s' if n > 1 else ''} inlined: {names}{_RESET}\n")
+            _append_output(f"{_ansi_fg(theme.system_color, dim=True)}  📎 {' and '.join(parts)} inlined: {names}{_RESET}\n")
             _append_output(f"{_ansi_fg(theme.system_color, dim=True)}{'─' * 60}{_RESET}\n")
             text = expanded
+            if inlined_images:
+                for img in inlined_images:
+                    if img not in _staged_images:
+                        _staged_images.append(img)
         else:
             _append_output(
                 f"\n{_ansi_fg(theme.accent_color, bold=True)}>{_RESET} {text}\n"
@@ -3701,7 +3712,9 @@ def run_cmd(
     # Expand @file references in the prompt (single-shot mode)
     if prompt_text:
         from tau.editor import expand_at_files
-        prompt_text, _inlined = expand_at_files(prompt_text, agent_config.workspace_root)
+        prompt_text, _inlined, _inlined_images = expand_at_files(prompt_text, agent_config.workspace_root)
+        if _inlined_images:
+            image = image + tuple(_inlined_images)
 
     if mode == "rpc":
         from tau.rpc import run_rpc

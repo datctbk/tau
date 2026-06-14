@@ -67,7 +67,7 @@ def _is_ignored(path: Path) -> bool:
         rel = path.resolve().relative_to(Path(_workspace_root).resolve())
     except Exception:
         rel = path
-    ignored = {".tau", ".git", ".venv", ".pytest_cache", "node_modules", "__pycache__", ".DS_Store"}
+    ignored = {".tau", ".git", ".venv", ".pytest_cache", "node_modules", "__pycache__", ".DS_Store", ".codegraph"}
     for part in rel.parts:
         if part in ignored:
             return True
@@ -335,7 +335,7 @@ def ls(path: str = ".", all: bool = False, long: bool = False) -> str:
 
 
 def code_index_get_changed(path: str = ".", persist: bool = False, max_paths: int = 200) -> str:
-    """Return changed files according to code index Merkle manifests."""
+    """Return changed files according to code index Merkle mwhat if i remove tau-codegraph any problem with tau-memory?anifests."""
     root = _resolve(path)
     workspace_root = Path(_workspace_root).resolve()
     try:

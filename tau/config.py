@@ -280,11 +280,11 @@ class TauConfig(BaseSettings):
 
     provider: str = "openai"
     model: str = "gpt-4o"
-    max_tokens: int = 6144 * 15
-    max_turns: int = 40
+    max_tokens: int = 6144 * 21
+    max_turns: int = 45
     trim_strategy: str = "sliding_window"
     compaction_enabled: bool = True
-    compaction_threshold: float = 0.60
+    compaction_threshold: float = 0.750
     system_prompt: str = (
         "You are tau, a minimal CLI coding agent. "
         "Use the available tools to help the user with coding tasks. "

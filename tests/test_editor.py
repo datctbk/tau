@@ -31,7 +31,7 @@ class TestExpandAtFiles:
 
     def test_single_file(self, tmp_path: Path) -> None:
         (tmp_path / "foo.py").write_text("print('hello')\n")
-        text, inlined = expand_at_files("review @foo.py", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("review @foo.py", str(tmp_path))
         assert len(inlined) == 1
         assert 'print(\'hello\')' in text
         assert '<file path="foo.py">' in text
@@ -40,7 +40,7 @@ class TestExpandAtFiles:
     def test_multiple_files(self, tmp_path: Path) -> None:
         (tmp_path / "a.py").write_text("aaa\n")
         (tmp_path / "b.py").write_text("bbb\n")
-        text, inlined = expand_at_files("compare @a.py and @b.py", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("compare @a.py and @b.py", str(tmp_path))
         assert len(inlined) == 2
         assert "aaa" in text
         assert "bbb" in text
@@ -49,42 +49,42 @@ class TestExpandAtFiles:
         sub = tmp_path / "src"
         sub.mkdir()
         (sub / "main.py").write_text("main code\n")
-        text, inlined = expand_at_files("look at @src/main.py", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("look at @src/main.py", str(tmp_path))
         assert len(inlined) == 1
         assert "main code" in text
         assert '<file path="src/main.py">' in text
 
     def test_nonexistent_file_left_as_is(self, tmp_path: Path) -> None:
-        text, inlined = expand_at_files("review @nonexist.py", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("review @nonexist.py", str(tmp_path))
         assert len(inlined) == 0
         assert "@nonexist.py" in text
 
     def test_outside_workspace_blocked(self, tmp_path: Path) -> None:
-        text, inlined = expand_at_files("review @/etc/passwd", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("review @/etc/passwd", str(tmp_path))
         assert len(inlined) == 0
         assert "@/etc/passwd" in text
 
     def test_no_at_references(self, tmp_path: Path) -> None:
-        text, inlined = expand_at_files("just a normal prompt", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("just a normal prompt", str(tmp_path))
         assert len(inlined) == 0
         assert text == "just a normal prompt"
 
     def test_at_in_email_not_expanded(self, tmp_path: Path) -> None:
         # @user is not a real file, should stay as-is
-        text, inlined = expand_at_files("email user@example.com", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("email user@example.com", str(tmp_path))
         assert len(inlined) == 0
 
     def test_large_file_skipped(self, tmp_path: Path) -> None:
         big = tmp_path / "big.txt"
         big.write_text("x" * (300 * 1024))
-        text, inlined = expand_at_files("read @big.txt", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("read @big.txt", str(tmp_path))
         assert len(inlined) == 0
         assert "too large" in text
 
     def test_binary_file_read_with_replace(self, tmp_path: Path) -> None:
         f = tmp_path / "data.bin"
         f.write_bytes(b"\x00\x01\x02hello\xff")
-        text, inlined = expand_at_files("read @data.bin", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("read @data.bin", str(tmp_path))
         # Should inline with replacement chars since we use errors='replace'
         assert len(inlined) == 1
 
@@ -271,7 +271,7 @@ class TestAtFileInCli:
     def test_expand_at_file_single_shot(self, tmp_path: Path) -> None:
         """expand_at_files is called programmatically — verify basic contract."""
         (tmp_path / "test.py").write_text("def foo(): pass\n")
-        text, inlined = expand_at_files("explain @test.py", str(tmp_path))
+        text, inlined, inlined_images = expand_at_files("explain @test.py", str(tmp_path))
         assert len(inlined) == 1
         assert "def foo(): pass" in text
         assert "@test.py" not in text

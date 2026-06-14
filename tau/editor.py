@@ -21,15 +21,16 @@ _AT_FILE_RE = re.compile(r"@((?:[A-Za-z]:)?[^\s@,;\"'`]+)")
 _MAX_INLINE_BYTES = 256 * 1024  # 256 KB
 
 
-def expand_at_files(text: str, workspace_root: str) -> tuple[str, list[str]]:
+def expand_at_files(text: str, workspace_root: str) -> tuple[str, list[str], list[str]]:
     """Expand ``@path/to/file`` references in *text*.
 
     Each ``@ref`` is replaced by a fenced code block with the file contents.
-    Returns ``(expanded_text, list_of_resolved_paths)`` — paths that were
+    Returns ``(expanded_text, list_of_resolved_paths, list_of_image_paths)`` — paths that were
     successfully inlined.  References to non-existent files are left as-is.
     """
     root = Path(workspace_root).resolve()
     inlined: list[str] = []
+    inlined_images: list[str] = []
 
     def _replace(m: re.Match) -> str:
         raw = m.group(1)
@@ -42,6 +43,10 @@ def expand_at_files(text: str, workspace_root: str) -> tuple[str, list[str]]:
             return m.group(0)
         if not p.is_file():
             return m.group(0)
+        if is_image_path(str(p)):
+            inlined_images.append(str(p))
+            return f"(attached image: {p.name})"
+
         if p.stat().st_size > _MAX_INLINE_BYTES:
             return m.group(0) + " (file too large to inline)"
         try:
@@ -50,10 +55,10 @@ def expand_at_files(text: str, workspace_root: str) -> tuple[str, list[str]]:
             return m.group(0)
         rel = p.relative_to(root)
         inlined.append(str(p))
-        return f"<file path=\"{rel}\">\n{content}\n</file>"
+        return f'<file path="{rel}">\n{content}\n</file>'
 
     expanded = _AT_FILE_RE.sub(_replace, text)
-    return expanded, inlined
+    return expanded, inlined, inlined_images
 
 
 # ---------------------------------------------------------------------------
