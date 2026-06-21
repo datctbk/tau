@@ -4505,3 +4505,147 @@ def profile_cmd(mode: str, gateway_repo: str) -> None:
         f"[dim]Gateway entrypoint -> {installed_entry}[/dim]\n"
         "[dim]Activate: source ~/.tau/profiles/prod.env[/dim]"
     )
+
+
+# ---------------------------------------------------------------------------
+# `tau setup` — batch install/update ecosystem packages
+# ---------------------------------------------------------------------------
+_ECOSYSTEM_PACKAGES = [
+    ("tau-memory",    "https://github.com/datctbk/tau-memory",    "Persistent memory across sessions"),
+    ("tau-agents",    "https://github.com/datctbk/tau-agents",    "Multi-agent orchestration"),
+    ("tau-assistant", "https://github.com/datctbk/tau-assistant", "Personal assistant layer"),
+    ("tau-gateway",   "https://github.com/datctbk/tau-gateway",   "Multi-platform messaging gateway"),
+    ("tau-web",       "https://github.com/datctbk/tau-web",       "Web fetch & search tools"),
+    ("tau-aidlc",     "https://github.com/datctbk/tau-aidlc",     "AI-DLC lifecycle extension"),
+]
+
+
+@main.command("setup")
+@click.option("--list", "list_only", is_flag=True, default=False, help="Show packages without installing.")
+@click.option("--minimal", is_flag=True, default=False, help="Skip ecosystem packages (verify core only).")
+@click.option("--update", is_flag=True, default=False, help="Update already-installed packages.")
+def setup_cmd(list_only: bool, minimal: bool, update: bool) -> None:
+    """Install or update all official tau ecosystem packages.
+
+    \b
+    Examples:
+      tau setup              install all recommended packages
+      tau setup --list       show what would be installed
+      tau setup --update     update already-installed packages
+      tau setup --minimal    verify core only, skip ecosystem
+    """
+    ensure_tau_home()
+    from tau.packages import PackageManager, PackageError, PackageAlreadyInstalledError
+
+    pm = PackageManager()
+    installed = {p.name for p in pm.list_packages()}
+
+    if list_only:
+        console.print()
+        console.print(Rule("tau ecosystem packages", style="dim"))
+        console.print()
+        console.print(f"[bold]{'PACKAGE':<20} {'STATUS':<14} {'DESCRIPTION'}[/bold]")
+        console.print(Rule(style="dim"))
+        for name, url, desc in _ECOSYSTEM_PACKAGES:
+            normalised = name.replace("-", "_").lower()
+            status = "[green]installed[/green]" if normalised in installed else "[dim]not installed[/dim]"
+            console.print(Text.assemble(
+                (f"  {name:<20}", Style(color="cyan", bold=True)),
+                ("", ""),
+            ), end="")
+            console.print(f"{status}  [dim]{desc}[/dim]")
+        console.print()
+        console.print(
+            "[dim]  Run [bold]tau setup[/bold] to install all, "
+            "or [bold]tau extensions install git:<url>[/bold] for individual packages.[/dim]"
+        )
+        console.print()
+        return
+
+    if minimal:
+        console.print("[green]  ✓  tau core is ready.[/green]")
+        console.print("[dim]  Run [bold]tau setup[/bold] (without --minimal) to install ecosystem packages.[/dim]")
+        return
+
+    console.print()
+    console.print(Rule("tau setup", style="dim"))
+    console.print()
+
+    success_count = 0
+    skip_count = 0
+    fail_count = 0
+
+    for name, url, desc in _ECOSYSTEM_PACKAGES:
+        normalised = name.replace("-", "_").lower()
+
+        if normalised in installed:
+            if update:
+                try:
+                    pm.update(normalised)
+                    console.print(Text.assemble(
+                        ("  ↻ ", Style(color="blue", bold=True)),
+                        ("updated ", Style(color="blue")),
+                        (name, Style(color="cyan", bold=True)),
+                    ))
+                    success_count += 1
+                except PackageError as exc:
+                    console.print(Text.assemble(
+                        ("  ✗ ", Style(color="red", bold=True)),
+                        (f"update failed: {name} — {exc}", Style(color="red")),
+                    ))
+                    fail_count += 1
+            else:
+                console.print(Text.assemble(
+                    ("  • ", Style(dim=True)),
+                    (name, Style(color="cyan")),
+                    ("  already installed", Style(dim=True)),
+                ))
+                skip_count += 1
+            continue
+
+        # Install
+        source = f"git:{url}"
+        try:
+            pkg = pm.install(source)
+            console.print(Text.assemble(
+                ("  ✓ ", Style(color="green", bold=True)),
+                ("installed ", Style(color="green")),
+                (name, Style(color="cyan", bold=True)),
+                (f"  ({pkg.version})", Style(dim=True)),
+            ))
+            success_count += 1
+        except PackageAlreadyInstalledError:
+            console.print(Text.assemble(
+                ("  • ", Style(dim=True)),
+                (name, Style(color="cyan")),
+                ("  already installed", Style(dim=True)),
+            ))
+            skip_count += 1
+        except PackageError as exc:
+            console.print(Text.assemble(
+                ("  ✗ ", Style(color="red", bold=True)),
+                (f"failed: {name} — {exc}", Style(color="red")),
+            ))
+            fail_count += 1
+
+    # Summary
+    console.print()
+    parts = []
+    if success_count:
+        parts.append(f"[green]{success_count} installed/updated[/green]")
+    if skip_count:
+        parts.append(f"[dim]{skip_count} already installed[/dim]")
+    if fail_count:
+        parts.append(f"[red]{fail_count} failed[/red]")
+    console.print(f"  {', '.join(parts)}")
+    console.print()
+
+    if fail_count:
+        console.print(
+            "[yellow]  ⚠ Some packages failed to install. "
+            "Check your network connection and try again.[/yellow]"
+        )
+    else:
+        console.print("[green]  ✓  tau ecosystem setup complete![/green]")
+    console.print()
+
