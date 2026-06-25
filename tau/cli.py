@@ -4517,6 +4517,7 @@ _ECOSYSTEM_PACKAGES = [
     ("tau-gateway",   "https://github.com/datctbk/tau-gateway",   "Multi-platform messaging gateway"),
     ("tau-web",       "https://github.com/datctbk/tau-web",       "Web fetch & search tools"),
     ("tau-aidlc",     "https://github.com/datctbk/tau-aidlc",     "AI-DLC lifecycle extension"),
+    ("tau-storm",     "https://github.com/datctbk/tau-storm",     "Deep research extension using the STORM algorithm"),
 ]
 
 
