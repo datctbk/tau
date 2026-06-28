@@ -51,3 +51,36 @@ def test_split_stream_text_for_thinking_with_partial_tag_carry():
     assert think == ""
     assert in_think is False
     assert carry == "<thi"
+
+
+def test_unsloth_chat_passes_max_tokens(monkeypatch):
+    from unittest.mock import MagicMock
+    from tau.core.types import Message
+
+    cfg = SimpleNamespace(
+        unsloth=SimpleNamespace(
+            base_url="http://localhost:8001/v1",
+            timeout_seconds=10.0,
+            stream_yield_every_chunks=0,
+            stream_yield_ms=0.0,
+        )
+    )
+    agent_cfg = SimpleNamespace(model="test-model", max_tokens=1234)
+    p = UnslothProvider(cfg, agent_cfg)
+
+    mock_post = MagicMock()
+    mock_post.return_value.headers = {}
+    mock_post.return_value.json.return_value = {
+        "choices": [{
+            "message": {"role": "assistant", "content": "hello"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+    }
+    monkeypatch.setattr(p._client, "post", mock_post)
+
+    p.chat([Message(role="user", content="hi")], tools=[], stream=False)
+
+    args, kwargs = mock_post.call_args
+    assert kwargs["json"]["max_tokens"] == 1234
+

@@ -428,6 +428,35 @@ class TestRemove:
         pm.remove("my_ext")
         assert not install_path.exists()
 
+    def test_remove_deletes_symlink(self, tmp_path):
+        target = tmp_path / "real_dir"
+        target.mkdir()
+        link = tmp_path / "packages" / "git" / "my_symlink"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+
+        pkg_data = {
+            "name": "my_symlink",
+            "source": "git:https://example.com/repo",
+            "install_path": str(link),
+            "installed_at": "2026-01-01T00:00:00+00:00",
+            "version": "abc123",
+            "enabled": True,
+            "resources": {
+                "extensions": [str(link)],
+                "skills": [],
+                "prompts": [],
+                "themes": [],
+            },
+        }
+        _seed_manifest(tmp_path, {"my_symlink": pkg_data})
+        pm = _pm(tmp_path)
+        pm.remove("my_symlink")
+
+        assert not link.exists()
+        assert not link.is_symlink()
+        assert target.exists()
+
     def test_remove_nonexistent_raises(self, tmp_path):
         pm = _pm(tmp_path)
         with pytest.raises(PackageNotFoundError):
