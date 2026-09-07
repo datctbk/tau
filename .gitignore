@@ -27,4 +27,3 @@ __pycache__/test_scroll_x.cpython-312-pytest-7.4.3.pyc
 __pycache__/test_scroll.cpython-312-pytest-7.4.3.pyc
 .tau/assistant/heartbeat_state.json
 .tau/audit/assistant-actions.jsonl
-.tau/audit/assistant-actions.jsonl

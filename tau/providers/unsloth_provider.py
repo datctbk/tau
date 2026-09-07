@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 import re
 import time
@@ -164,7 +165,12 @@ class UnslothProvider:
             pool=timeout_s,
         )
 
-        self._client = httpx.Client(timeout=self._request_timeout)
+        headers: dict[str, str] = {}
+        api_key = getattr(config.unsloth, "api_key", "") or getattr(config, "api_key", "") or os.environ.get("UNSLOTH_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        self._client = httpx.Client(headers=headers, timeout=self._request_timeout)
         self._stream_yield_every_chunks = max(0, int(config.unsloth.stream_yield_every_chunks))
         self._stream_yield_s = max(0.0, float(config.unsloth.stream_yield_ms) / 1000.0)
         self._last_response_headers: dict[str, str] = {}

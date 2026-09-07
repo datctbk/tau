@@ -60,6 +60,7 @@ class OllamaProviderConfig(BaseSettings):
 
 class UnslothProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="UNSLOTH_")
+    api_key: str = "sk-tau-internal-secret"
     base_url: str = "http://localhost:8001/v1"
     timeout_seconds: float = 2*60.0
     # Streaming read timeout in seconds. <= 0 disables read timeout
