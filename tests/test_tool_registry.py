@@ -72,3 +72,12 @@ def test_unregister_removes_tool():
 def test_unregister_nonexistent_is_noop():
     reg = ToolRegistry()
     reg.unregister("ghost")  # should not raise
+
+
+def test_dispatch_truncates_long_output():
+    reg = ToolRegistry(max_result_chars=50)
+    reg.register(_make_tool("long", lambda x: "a" * 200))
+    result = reg.dispatch(ToolCall(id="1", name="long", arguments={"x": "test"}))
+    assert len(result.content) < 200
+    assert "truncated" in result.content
+

@@ -5,6 +5,7 @@ from tau.core.retrieval_mode import retrieval_mode_label, semantic_retrieval_ena
 
 def test_retrieval_mode_defaults_to_lexical(monkeypatch):
     monkeypatch.delenv("TAU_SEMANTIC_RETRIEVAL", raising=False)
+    monkeypatch.setattr("tau.core.rehydrate._rehydrate_providers", [])
     assert semantic_retrieval_enabled() is False
     assert retrieval_mode_label() == "lexical"
 

@@ -67,11 +67,58 @@ def _is_ignored(path: Path) -> bool:
         rel = path.resolve().relative_to(Path(_workspace_root).resolve())
     except Exception:
         rel = path
-    ignored = {".tau", ".git", ".venv", ".pytest_cache", "node_modules", "__pycache__", ".DS_Store", ".codegraph"}
+    ignored_dirs = {
+        ".tau",
+        ".git",
+        ".venv",
+        ".pytest_cache",
+        "node_modules",
+        "__pycache__",
+        ".DS_Store",
+        ".codegraph",
+        "target",
+        "build",
+        "dist",
+        "out",
+        "bin",
+        ".gradle",
+        ".m2",
+        ".idea",
+        ".vscode",
+    }
     for part in rel.parts:
-        if part in ignored:
+        if part in ignored_dirs:
             return True
+    ignored_exts = {
+        ".class",
+        ".jar",
+        ".war",
+        ".ear",
+        ".pyc",
+        ".pyo",
+        ".o",
+        ".obj",
+        ".so",
+        ".dylib",
+        ".dll",
+        ".exe",
+        ".bin",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".pdf",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".7z",
+        ".rar",
+    }
+    if path.suffix.lower() in ignored_exts:
+        return True
     return False
+
 
 
 # ---------------------------------------------------------------------------
@@ -80,9 +127,15 @@ def _is_ignored(path: Path) -> bool:
 
 def read_file(path: str, start_line: int = 0, end_line: int = -1) -> str:
     p = _resolve(path)
+    try:
+        with open(p, "rb") as bf:
+            if b"\x00" in bf.read(1024):
+                return f"[Binary file cannot be displayed: {path}]"
+    except OSError:
+        pass
     lines = p.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
     chunk = lines[start_line:] if end_line == -1 else lines[start_line:end_line + 1]
-    numbered = [f"{i:4d} | {line}" for i, line in enumerate(chunk, start=start_line + 1)]
+    numbered = [f"{i:4d} | {line.replace(chr(0), '')}" for i, line in enumerate(chunk, start=start_line + 1)]
     return "".join(numbered) if numbered else "(empty)"
 
 
@@ -137,38 +190,41 @@ def search_files(
     if changed_only:
         targets = _filter_targets_changed_only(root, targets)
     for fpath in targets:
-            try:
-                text = fpath.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            for i, line in enumerate(text.splitlines(), 1):
-                hit = bool(compiled.search(line)) if use_regex else (pattern in line)
-                if hit:
-                    line_content = line.strip()
-                    if len(line_content) > 1000:
-                        if use_regex:
-                            match = compiled.search(line_content)
-                            if match:
-                                start, end = match.span()
-                                left = max(0, start - 150)
-                                right = min(len(line_content), end + 150)
-                                prefix = "..." if left > 0 else ""
-                                suffix = "..." if right < len(line_content) else ""
-                                line_content = f"{prefix}{line_content[left:right]}{suffix} [line truncated: total {len(line_content):,} chars]"
-                            else:
-                                line_content = line_content[:1000] + " ... [line truncated]"
+        try:
+            with open(fpath, "rb") as bf:
+                if b"\x00" in bf.read(1024):
+                    continue
+            text = fpath.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            hit = bool(compiled.search(line)) if use_regex else (pattern in line)
+            if hit:
+                line_content = line.strip().replace("\x00", "")
+                if len(line_content) > 1000:
+                    if use_regex:
+                        match = compiled.search(line_content)
+                        if match:
+                            start, end = match.span()
+                            left = max(0, start - 150)
+                            right = min(len(line_content), end + 150)
+                            prefix = "..." if left > 0 else ""
+                            suffix = "..." if right < len(line_content) else ""
+                            line_content = f"{prefix}{line_content[left:right]}{suffix} [line truncated: total {len(line_content):,} chars]"
                         else:
-                            start = line_content.find(pattern)
-                            if start != -1:
-                                end = start + len(pattern)
-                                left = max(0, start - 150)
-                                right = min(len(line_content), end + 150)
-                                prefix = "..." if left > 0 else ""
-                                suffix = "..." if right < len(line_content) else ""
-                                line_content = f"{prefix}{line_content[left:right]}{suffix} [line truncated: total {len(line_content):,} chars]"
-                            else:
-                                line_content = line_content[:1000] + " ... [line truncated]"
-                    matches.append(f"{fpath.relative_to(root)}:{i}: {line_content}")
+                            line_content = line_content[:1000] + " ... [line truncated]"
+                    else:
+                        start = line_content.find(pattern)
+                        if start != -1:
+                            end = start + len(pattern)
+                            left = max(0, start - 150)
+                            right = min(len(line_content), end + 150)
+                            prefix = "..." if left > 0 else ""
+                            suffix = "..." if right < len(line_content) else ""
+                            line_content = f"{prefix}{line_content[left:right]}{suffix} [line truncated: total {len(line_content):,} chars]"
+                        else:
+                            line_content = line_content[:1000] + " ... [line truncated]"
+                matches.append(f"{fpath.relative_to(root)}:{i}: {line_content}")
     return "\n".join(matches[:200]) if matches else "No matches found."
 
 
@@ -178,7 +234,7 @@ def grep(
     recursive: bool = True,
     case_insensitive: bool = False,
     include: str = "",
-    max_results: int = 200,
+    max_results: int = 50,
     changed_only: bool = False,
 ) -> str:
     """Search for a regex pattern across file contents."""
@@ -190,10 +246,16 @@ def grep(
         return f"Invalid regex: {exc}"
 
     matches: list[str] = []
+    total_chars = 0
+    MAX_GREP_CHARS = 12000
+
+    if include and include.startswith("*"):
+        include = "." + include
     try:
         include_pat = re.compile(include) if include else None
     except re.error as exc:
         return f"Invalid include regex: {exc}"
+
 
     targets: list[Path] = []
     if root.is_file():
@@ -209,6 +271,9 @@ def grep(
         if include_pat and not include_pat.search(fpath.name):
             continue
         try:
+            with open(fpath, "rb") as bf:
+                if b"\x00" in bf.read(1024):
+                    continue
             text = fpath.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
@@ -218,7 +283,7 @@ def grep(
                     rel = fpath.relative_to(Path(_workspace_root).resolve())
                 except ValueError:
                     rel = fpath
-                line_content = line.rstrip()
+                line_content = line.rstrip().replace("\x00", "")
                 if len(line_content) > 1000:
                     match = compiled.search(line_content)
                     if match:
@@ -230,10 +295,15 @@ def grep(
                         line_content = f"{prefix}{line_content[left:right]}{suffix} [line truncated: total {len(line_content):,} chars]"
                     else:
                         line_content = line_content[:1000] + " ... [line truncated]"
-                matches.append(f"{rel}:{i}: {line_content}")
+                match_str = f"{rel}:{i}: {line_content}"
+                matches.append(match_str)
+                total_chars += len(match_str) + 1
                 if len(matches) >= max_results:
                     return "\n".join(matches) + f"\n(truncated at {max_results} results)"
+                if total_chars >= MAX_GREP_CHARS:
+                    return "\n".join(matches) + f"\n(truncated at {len(matches)} results; character budget reached)"
     return "\n".join(matches) if matches else "No matches found."
+
 
 
 def find(
@@ -246,10 +316,13 @@ def find(
 ) -> str:
     """Find files or directories by name pattern and/or type."""
     root = _resolve(path)
+    if name and name.startswith("*"):
+        name = "." + name
     try:
         name_pat = re.compile(name) if name else None
     except re.error as exc:
         return f"Invalid name regex: {exc}"
+
     results: list[str] = []
 
     changed = _get_changed_rel_paths(Path(_workspace_root).resolve()) if changed_only else set()
@@ -456,7 +529,7 @@ FS_TOOLS: list[ToolDefinition] = [
             "recursive": ToolParameter(type="boolean", description="Search subdirectories recursively (default true).", required=False),
             "case_insensitive": ToolParameter(type="boolean", description="Case-insensitive matching (default false).", required=False),
             "include": ToolParameter(type="string", description="Regex filter on filename (e.g. '\\.py$'). Empty = all files.", required=False),
-            "max_results": ToolParameter(type="integer", description="Maximum number of matching lines to return (default 200).", required=False),
+            "max_results": ToolParameter(type="integer", description="Maximum number of matching lines to return (default 50).", required=False),
             "changed_only": ToolParameter(type="boolean", description="If true, search only added/modified files from code index.", required=False),
         },
         handler=grep,

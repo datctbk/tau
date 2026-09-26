@@ -95,7 +95,7 @@ class OllamaProvider:
                     tool_calls_raw.extend(msg["tool_calls"])
 
                 # Thinking tokens — yield with is_thinking=True, never buffer
-                thinking = msg.get("thinking", "")
+                thinking = msg.get("thinking") or msg.get("reasoning_content") or msg.get("reasoning") or ""
                 if thinking:
                     yield TextDelta(text=thinking, is_thinking=True)  # type: ignore[misc]
 

@@ -254,6 +254,8 @@ class ToolsConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TAU_TOOLS_")
     disabled: list[str] = []      # tool names to disable, e.g. ["run_bash"]
     enabled_only: list[str] = []  # if non-empty, ONLY these tools are registered
+    max_result_chars: int = 16000 # maximum chars for any tool output (0 = unlimited)
+
 
 
 class PricingConfig(BaseSettings):

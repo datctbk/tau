@@ -308,5 +308,42 @@ def test_grep_truncates_long_lines(workspace: Path):
     assert "giant.txt" in res
     assert "MATCHPATTERN" in res
     assert "[line truncated: total 4,012 chars]" in res
-    # Ensure it only returns a slice and not the entire 4012 characters
     assert len(res) < 1000
+
+
+def test_ignores_target_and_binary_files(workspace: Path):
+    # Setup files in target/ and with .class extension
+    target_class = workspace / "target" / "classes" / "com" / "acb" / "Foo.class"
+    target_class.parent.mkdir(parents=True, exist_ok=True)
+    target_class.write_bytes(b"\xca\xfe\xba\xbe\x00\x00\x00=\x00G\x07\x00\x02onboardingStatus\x00")
+
+    standalone_class = workspace / "Standalone.class"
+    standalone_class.write_bytes(b"\xca\xfe\xba\xbe\x00onboardingStatus\x00")
+
+    binary_no_ext = workspace / "bin_file"
+    binary_no_ext.write_bytes(b"hello\x00world\x00onboardingStatus")
+
+    src_java = workspace / "src" / "Foo.java"
+    src_java.parent.mkdir(parents=True, exist_ok=True)
+    src_java.write_text("public class Foo { String onboardingStatus; }", encoding="utf-8")
+
+    # Verify grep ignores target and binary files completely
+    grep_res = grep("onboardingStatus", ".")
+    assert "src/Foo.java" in grep_res
+    assert "target" not in grep_res
+    assert "Standalone.class" not in grep_res
+    assert "bin_file" not in grep_res
+    assert "\x00" not in grep_res
+
+    # Verify search_files also ignores them
+    search_res = search_files("onboardingStatus", ".")
+    assert "src/Foo.java" in search_res
+    assert "target" not in search_res
+    assert "Standalone.class" not in search_res
+    assert "bin_file" not in search_res
+    assert "\x00" not in search_res
+
+    # Verify read_file handles binary gracefully without dumping null bytes
+    read_res = read_file("Standalone.class")
+    assert "[Binary file cannot be displayed" in read_res
+

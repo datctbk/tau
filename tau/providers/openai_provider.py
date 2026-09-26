@@ -156,6 +156,15 @@ class OpenAIProvider:
 
                 delta = choice.delta
 
+                # Reasoning / thinking delta (DeepSeek, Qwen, o1/o3, Ollama, vLLM)
+                reasoning = (
+                    getattr(delta, "reasoning_content", None)
+                    or getattr(delta, "reasoning", None)
+                    or getattr(delta, "thinking", None)
+                )
+                if reasoning:
+                    yield TextDelta(text=reasoning, is_thinking=True)  # type: ignore[misc]
+
                 # Text delta — yield via the generator protocol
                 if delta.content:
                     content_parts.append(delta.content)

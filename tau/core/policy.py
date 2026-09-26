@@ -62,7 +62,7 @@ class DefaultPolicyProfileEvaluator:
                 pass
 
         name = call.name
-        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls"}:
+        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls"} or name.startswith("codegraph_"):
             return "low"
         if name in {"write_file", "edit_file"}:
             return "medium"

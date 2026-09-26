@@ -178,7 +178,7 @@ def build_agent(
     print_fn: Callable[[str], None] | None = None,
     provider_factory: Callable[[TauConfig, AgentConfig], object] | None = None,
 ) -> tuple[Agent, ExtensionRegistry]:
-    registry = ToolRegistry()
+    registry = ToolRegistry(max_result_chars=tau_config.tools.max_result_chars)
     register_builtin_tools(registry)
 
     if tools_filter is not None:
