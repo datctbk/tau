@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SUPPORTED_EXTS = {".py", ".js", ".ts", ".java", ".go", ".rs"}
+SUPPORTED_EXTS = {".py", ".js", ".ts", ".java", ".go", ".rs", ".cs"}
 
 
 @dataclass(frozen=True)
@@ -167,6 +167,12 @@ _RUST_DECL_RE = re.compile(
     re.MULTILINE,
 )
 
+_CSHARP_DECL_RE = re.compile(
+    r"^\s*(?:public|protected|private|internal|static|sealed|abstract|partial|\s)+\s*(?:class|interface|struct|record|enum)\s+([A-Za-z_]\w*)"
+    r"|^\s*(?:public|protected|private|internal|static|virtual|override|abstract|async|\s)+\s*[\w<>\[\], ?]+\s+([A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+
 
 def _chunk_by_decl_regex(rel_path: str, text: str, language: str, decl_re: re.Pattern[str]) -> list[CodeChunk]:
     lines = text.splitlines(keepends=True)
@@ -267,4 +273,7 @@ def chunk_file(path: str | Path, text: str) -> list[CodeChunk]:
     if ext == ".rs":
         chunks = _chunk_by_decl_regex(rel, text, "rust", _RUST_DECL_RE)
         return chunks if chunks else _chunk_text_fallback(rel, text, "rust")
+    if ext == ".cs":
+        chunks = _chunk_by_decl_regex(rel, text, "csharp", _CSHARP_DECL_RE)
+        return chunks if chunks else _chunk_text_fallback(rel, text, "csharp")
     return _chunk_text_fallback(rel, text, "text")

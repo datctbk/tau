@@ -95,3 +95,19 @@ def test_chunk_rust_decls():
     assert any(c.name == "User" for c in chunks)
     assert any(c.name == "ping" for c in chunks)
     assert all(c.language == "rust" for c in chunks)
+
+
+def test_chunk_csharp_decls():
+    text = (
+        "public class AccountService {\n"
+        "  public async Task<string> ProcessAsync() { return \"ok\"; }\n"
+        "}\n\n"
+        "public interface IAccountRepo {\n"
+        "  void Save();\n"
+        "}\n"
+    )
+    chunks = chunk_file("src/AccountService.cs", text)
+    assert any(c.name == "AccountService" for c in chunks)
+    assert any(c.name == "ProcessAsync" for c in chunks)
+    assert any(c.name == "IAccountRepo" for c in chunks)
+    assert all(c.language == "csharp" for c in chunks)
