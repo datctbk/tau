@@ -431,6 +431,8 @@ EXTENSION = _E()
         c = ContextManager(_cfg())
         reg = _make_registry(tmp_path)
         reg.load_all(r, c, steering=None, console_print=lambda _: None)
+        from tau.core.prompt_layers import apply_prompt_layers
+        apply_prompt_layers(c, reg.prompt_layers())
         sys_msgs = [m for m in c.get_messages() if m.role == "system"]
         combined = " ".join(m.content for m in sys_msgs)
         assert "juggle" in combined
@@ -442,6 +444,8 @@ EXTENSION = _E()
         base_sys = [m.content for m in c.get_messages() if m.role == "system"]
         reg = _make_registry(tmp_path)
         reg.load_all(r, c, steering=None, console_print=lambda _: None)
+        from tau.core.prompt_layers import apply_prompt_layers
+        apply_prompt_layers(c, reg.prompt_layers())
         new_sys = [m.content for m in c.get_messages() if m.role == "system"]
         assert base_sys == new_sys
 

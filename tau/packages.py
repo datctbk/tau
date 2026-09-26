@@ -364,6 +364,8 @@ class PackageManager:
         npm_root = self._npm_dir / name
         if npm_root.is_dir() and str(install_path).startswith(str(npm_root)):
             shutil.rmtree(npm_root)
+        elif install_path.is_symlink():
+            install_path.unlink()
         elif install_path.is_dir():
             shutil.rmtree(install_path)
 

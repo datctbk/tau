@@ -160,6 +160,15 @@ class PersistentShell:
 # Pluggable confirmation hook — CLI replaces this so it can flush the
 # in-progress stream to stdout before showing the prompt.
 _confirm_hook: Callable[[str], bool] | None = None
+_policy_approved_commands: set[str] = set()
+
+
+def mark_command_policy_approved(command: str) -> None:
+    _policy_approved_commands.add(command)
+
+
+def clear_policy_approved_commands() -> None:
+    _policy_approved_commands.clear()
 
 
 def configure_shell(
@@ -198,46 +207,52 @@ def run_bash(command: str, workdir: str = "") -> str:
     if not _is_allowed(command):
         return f"Error: command not in allowlist — {command!r}"
 
-    if _shell_config["require_confirmation"]:
-        confirm = _confirm_hook if _confirm_hook is not None else _default_confirm
-        if not confirm(command):
-            return "Cancelled by user."
-
-    effective_workdir = workdir or _shell_config["workspace_root"]
-
-    if _shell_config.get("use_persistent_shell"):
-        global _persistent_shell
-        if _persistent_shell is None:
-            _persistent_shell = PersistentShell(timeout=_shell_config["timeout"])
-        return _persistent_shell.execute(command, workdir=effective_workdir)
-
-    logger.debug("run_bash (ephemeral): %s", command)
-    import os
-    clean_env = {k: v for k, v in os.environ.items() if not k.startswith("Malloc")}
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            executable="/bin/bash",
-            cwd=effective_workdir,
-            capture_output=True,
-            text=True,
-            timeout=_shell_config["timeout"],
-            env=clean_env,
-        )
-    except subprocess.TimeoutExpired:
-        return f"Error: command timed out after {_shell_config['timeout']}s"
-    except Exception as exc:  # noqa: BLE001
-        return f"Error: {exc}"
+        if _shell_config["require_confirmation"]:
+            if command in _policy_approved_commands:
+                pass
+            else:
+                confirm = _confirm_hook if _confirm_hook is not None else _default_confirm
+                if not confirm(command):
+                    return "Cancelled by user."
 
-    parts: list[str] = []
-    if result.stdout:
-        parts.append(_compact_python_tracebacks(result.stdout.rstrip()))
-    if result.stderr:
-        compact_stderr = _compact_python_tracebacks(result.stderr.rstrip())
-        parts.append(f"[stderr]\n{compact_stderr}")
-    parts.append(f"[exit {result.returncode}]")
-    return "\n".join(parts)
+        effective_workdir = workdir or _shell_config["workspace_root"]
+
+        if _shell_config.get("use_persistent_shell"):
+            global _persistent_shell
+            if _persistent_shell is None:
+                _persistent_shell = PersistentShell(timeout=_shell_config["timeout"])
+            return _persistent_shell.execute(command, workdir=effective_workdir)
+
+        logger.debug("run_bash (ephemeral): %s", command)
+        import os
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("Malloc")}
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                executable="/bin/bash",
+                cwd=effective_workdir,
+                capture_output=True,
+                text=True,
+                timeout=_shell_config["timeout"],
+                env=clean_env,
+            )
+        except subprocess.TimeoutExpired:
+            return f"Error: command timed out after {_shell_config['timeout']}s"
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: {exc}"
+
+        parts: list[str] = []
+        if result.stdout:
+            parts.append(_compact_python_tracebacks(result.stdout.rstrip()))
+        if result.stderr:
+            compact_stderr = _compact_python_tracebacks(result.stderr.rstrip())
+            parts.append(f"[stderr]\n{compact_stderr}")
+        parts.append(f"[exit {result.returncode}]")
+        return "\n".join(parts)
+    finally:
+        _policy_approved_commands.discard(command)
 
 
 SHELL_TOOLS: list[ToolDefinition] = [

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 import re
 import time
@@ -144,10 +145,11 @@ class UnslothProvider:
     """Provider for Unsloth Studio / llama-server (OpenAI-compatible)."""
 
     def __init__(self, config: TauConfig, agent_config: AgentConfig) -> None:
+        self._agent_config = agent_config
         self._model = agent_config.model
         self._base_url = config.unsloth.base_url.rstrip("/")
         timeout_s = max(5.0, float(config.unsloth.timeout_seconds))
-        stream_read_timeout_s = float(config.unsloth.stream_read_timeout_seconds)
+        stream_read_timeout_s = float(getattr(config.unsloth, "stream_read_timeout_seconds", 30.0))
 
         # Default request timeout for non-streaming calls.
         self._request_timeout = httpx.Timeout(timeout_s)
@@ -163,7 +165,12 @@ class UnslothProvider:
             pool=timeout_s,
         )
 
-        self._client = httpx.Client(timeout=self._request_timeout)
+        headers: dict[str, str] = {}
+        api_key = getattr(config.unsloth, "api_key", "") or getattr(config, "api_key", "") or os.environ.get("UNSLOTH_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        self._client = httpx.Client(headers=headers, timeout=self._request_timeout)
         self._stream_yield_every_chunks = max(0, int(config.unsloth.stream_yield_every_chunks))
         self._stream_yield_s = max(0.0, float(config.unsloth.stream_yield_ms) / 1000.0)
         self._last_response_headers: dict[str, str] = {}
@@ -200,6 +207,9 @@ class UnslothProvider:
             "messages": oai_messages,
             "stream": stream,
         }
+        max_tokens = getattr(self._agent_config, "max_tokens", None)
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if oai_tools:
             payload["tools"] = oai_tools
 

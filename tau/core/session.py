@@ -104,6 +104,7 @@ class Session:
                 "system_prompt": self.config.system_prompt,
                 "trim_strategy": self.config.trim_strategy,
                 "workspace_root": self.config.workspace_root,
+                "approved_risky_actions": getattr(self.config, "approved_risky_actions", False),
             },
             "messages": self.messages,
             "compactions": self.compactions,
@@ -124,6 +125,7 @@ class Session:
             system_prompt=cfg_d.get("system_prompt", ""),
             trim_strategy=cfg_d.get("trim_strategy", "sliding_window"),
             workspace_root=cfg_d.get("workspace_root", "."),
+            approved_risky_actions=cfg_d.get("approved_risky_actions", False),
         )
         return cls(
             id=d["id"],

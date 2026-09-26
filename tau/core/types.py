@@ -68,6 +68,7 @@ class ToolDefinition:
     description: str
     parameters: dict[str, ToolParameter]  # param_name → ToolParameter
     handler: Callable[..., Any]
+    risk: str = "medium"
 
     def to_json_schema(self) -> dict[str, Any]:
         """Return the JSON Schema object for the function parameters."""
@@ -209,12 +210,15 @@ class AgentConfig:
     # --- policy scaffold ---
     policy_enabled: bool = True
     policy_profile: Literal["strict", "balanced", "dev"] = "balanced"
+    approved_risky_actions: bool = False
     # --- optional prompt budget mode ---
     prompt_budget_enabled: bool = False
     prompt_budget_max_input_tokens: int = 3200
     prompt_budget_output_reserve: int = 1000
     prompt_budget_max_tools_total: int = 12
     dynamic_prompt_builder_enabled: bool = False
+    # --- modern context compression (opt-in via CLI -zip) ---
+    modern_compaction: bool = False
     # --- smart model routing ---
     smart_routing_config: dict | None = None  # None = disabled
     # --- optional infrastructure capabilities ---

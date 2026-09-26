@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,6 +40,7 @@ from tau.core.assistant_events import append_assistant_event, make_assistant_eve
 from tau.core.policy import DefaultToolPolicyHook
 from tau.core.context import _messages_tokens
 from tau.core.capabilities import build_capabilities
+from tau.core.rehydrate import build_rehydrate_block
 
 if TYPE_CHECKING:
     from tau.core.context import ContextManager
@@ -53,29 +55,10 @@ logger = logging.getLogger(__name__)
 # Error substrings that are safe to retry (transient / server-side).
 # Context-overflow errors are NOT included — those are handled by compaction.
 _RETRYABLE_PATTERNS = (
-    "rate limit",
-    "rate_limit",
-    "too many requests",
-    "429",
-    "overloaded",
-    "overload",
-    "503",
-    "502",
-    "500",
-    "service unavailable",
-    "server error",
-    "internal error",
-    "bad gateway",
-    "timeout",
-    "timed out",
-    "connection error",
-    "connection refused",
-    "network error",
-    "fetch failed",
-    "socket",
-    "reset",
-    "temporarily unavailable",
-    "retry",
+    "rate limit", "rate_limit", "too many requests", "429", "overloaded", "overload",
+    "503", "502", "500", "service unavailable", "server error", "internal error",
+    "bad gateway", "timeout", "timed out", "connection error", "connection refused",
+    "network error", "fetch failed", "socket", "reset", "temporarily unavailable", "retry"
 )
 
 # Sentinels returned by _call_with_retry
@@ -87,6 +70,7 @@ _STEER_SENTINEL = object()
 
 _EMPTY_RESPONSE_NUDGE = "Please continue and provide at least a short textual response."
 _EMPTY_RESPONSE_MAX_RETRIES = 1
+_REHYDRATE_FRAGMENT_NAME = "rehydrated_code_context"
 
 
 class MaxTurnsReachedError(Exception):
@@ -124,6 +108,14 @@ class Agent:
             if config.policy_enabled
             else None
         )
+        self._rehydrate_needed = False
+
+    @staticmethod
+    def _env_bool(name: str, default: bool) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _tokenize(text: str) -> set[str]:
@@ -186,6 +178,7 @@ class Agent:
 
     def _prepare_request_payload(self) -> tuple[list[Message], list[ToolDefinition]]:
         messages = self._context.get_messages()
+        messages = self._attach_rehydrated_context_if_needed(messages)
         tools = self._registry.all_definitions()
         if not self._config.prompt_budget_enabled:
             return messages, tools
@@ -208,6 +201,76 @@ class Agent:
         )
 
         return budgeted_messages, budgeted_tools
+
+    def _attach_rehydrated_context_if_needed(self, messages: list[Message]) -> list[Message]:
+        if not self._rehydrate_needed:
+            if self._context.prompt_builder is not None:
+                self._context.prompt_builder.remove_fragment(_REHYDRATE_FRAGMENT_NAME)
+                self._context._update_system_message()  # type: ignore[attr-defined]
+            return messages
+        if not self._env_bool("TAU_REHYDRATE_AFTER_COMPACTION", True):
+            _trace.log_extension_event(
+                "core",
+                "rehydrate_context",
+                {"triggered": False, "selected_chunks": 0, "chars_used": 0, "reason": "disabled"},
+            )
+            if self._context.prompt_builder is not None:
+                self._context.prompt_builder.remove_fragment(_REHYDRATE_FRAGMENT_NAME)
+                self._context._update_system_message()  # type: ignore[attr-defined]
+            return messages
+
+        query = ""
+        for m in reversed(messages):
+            if m.role == "user":
+                query = (m.content or "").strip()
+                break
+        if not query:
+            _trace.log_extension_event(
+                "core",
+                "rehydrate_context",
+                {"triggered": False, "selected_chunks": 0, "chars_used": 0, "reason": "no_query"},
+            )
+            return messages
+
+        block = build_rehydrate_block(
+            query=query,
+            workspace_root=self._config.workspace_root,
+            max_chunks=max(1, int(os.getenv("TAU_REHYDRATE_MAX_CHUNKS", "8"))),
+            max_chars_per_chunk=max(200, int(os.getenv("TAU_REHYDRATE_MAX_CHARS_PER_CHUNK", "1200"))),
+            max_total_chars=max(1000, int(os.getenv("TAU_REHYDRATE_MAX_TOTAL_CHARS", "7000"))),
+            max_files_scan=max(20, int(os.getenv("TAU_REHYDRATE_MAX_FILES_SCAN", "120"))),
+        )
+        if not block:
+            _trace.log_extension_event(
+                "core",
+                "rehydrate_context",
+                {"triggered": False, "selected_chunks": 0, "chars_used": 0, "reason": "no_hits"},
+            )
+            return messages
+
+        selected_chunks = block.count("```text")
+        chars_used = len(block)
+        _trace.log_extension_event(
+            "core",
+            "rehydrate_context",
+            {
+                "triggered": True,
+                "selected_chunks": selected_chunks,
+                "chars_used": chars_used,
+            },
+        )
+
+        # Attach as ephemeral system message for this request only.
+        msg = Message(role="system", content=block)
+        if self._context.prompt_builder is not None:
+            self._context.prompt_builder.add_fragment(
+                _REHYDRATE_FRAGMENT_NAME,
+                block,
+                priority=60,
+            )
+            self._context._update_system_message()  # type: ignore[attr-defined]
+            return self._context.get_messages()
+        return messages + [msg]
 
     # ------------------------------------------------------------------
     # Tool dispatch (parallel or sequential)
@@ -239,7 +302,10 @@ class Agent:
                     results[idx] = future.result()
                 except Exception as exc:  # noqa: BLE001
                     call = calls[idx]
-                    logger.exception("Parallel dispatch error for tool %r", call.name)
+                    if isinstance(exc, (FileNotFoundError, NotADirectoryError, IsADirectoryError, PermissionError, ValueError)):
+                        logger.debug("Tool dispatch domain error for %r: %s", call.name, exc)
+                    else:
+                        logger.exception("Parallel dispatch error for tool %r", call.name)
                     results[idx] = ToolResult(
                         tool_call_id=call.id,
                         content=f"Error in tool {call.name!r}: {exc}",
@@ -481,6 +547,11 @@ class Agent:
 
                             approved = bool(self._policy_approval_hook(reason))
                             if approved:
+                                if call.name == "run_bash":
+                                    cmd = call.arguments.get("command")
+                                    if isinstance(cmd, str):
+                                        from tau.tools.shell import mark_command_policy_approved
+                                        mark_command_policy_approved(cmd)
                                 yield PolicyDecisionEvent(
                                     action=call.name,
                                     decision="approved",
@@ -643,6 +714,9 @@ class Agent:
                     name=call.name,
                 ))
 
+            from tau.tools.shell import clear_policy_approved_commands
+            clear_policy_approved_commands()
+
             # Fast-path: when any `agent` tool call in this batch spawns a
             # background task, tool outputs are already user-ready. Skip the
             # extra LLM round-trip that usually adds redundant narration.
@@ -716,6 +790,8 @@ class Agent:
                     messages=messages,
                     tools=tools,
                 )
+                if self._rehydrate_needed:
+                    self._rehydrate_needed = False
                 return raw, None
 
             except Exception as exc:  # noqa: BLE001
@@ -777,6 +853,7 @@ class Agent:
         self._context.restore([m.to_dict() for m in new_messages if m.role != "system"])
         tokens_after = self._context.token_count()
         self._session_manager.append_compaction(self._session, entry)
+        self._rehydrate_needed = True
 
         yield CompactionEvent(
             stage="end",
@@ -815,6 +892,7 @@ class Agent:
         self._context.restore([m.to_dict() for m in new_messages if m.role != "system"])
         tokens_after = self._context.token_count()
         self._session_manager.append_compaction(self._session, entry)
+        self._rehydrate_needed = True
 
         yield CompactionEvent(
             stage="end",

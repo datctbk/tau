@@ -54,6 +54,7 @@ def make_agent_config(
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     minimal: bool = False,
+    zip_mode: bool = False,
 ) -> AgentConfig:
     if provider:
         tau_config.provider = provider
@@ -91,6 +92,7 @@ def make_agent_config(
         prompt_budget_output_reserve=max(0, int(tau_config.prompt_budget_output_reserve)),
         prompt_budget_max_tools_total=max(1, int(tau_config.prompt_budget_max_tools_total)),
         dynamic_prompt_builder_enabled=bool(tau_config.dynamic_prompt_builder_enabled),
+        modern_compaction=bool(zip_mode),
         smart_routing_config=(
             tau_config.smart_routing
             if (tau_config.smart_routing.enabled and tau_config.capabilities.smart_routing)
@@ -176,7 +178,7 @@ def build_agent(
     print_fn: Callable[[str], None] | None = None,
     provider_factory: Callable[[TauConfig, AgentConfig], object] | None = None,
 ) -> tuple[Agent, ExtensionRegistry]:
-    registry = ToolRegistry()
+    registry = ToolRegistry(max_result_chars=tau_config.tools.max_result_chars)
     register_builtin_tools(registry)
 
     if tools_filter is not None:

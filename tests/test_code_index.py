@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tau.core.chunker import chunk_file
 from tau.core.code_index import (
     build_manifest,
     default_stats_path,
@@ -15,6 +16,7 @@ from tau.core.code_index import (
 )
 
 
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -24,8 +26,9 @@ def test_build_manifest_basic(tmp_path: Path):
     _write(tmp_path / "a.py", "print('a')\n")
     _write(tmp_path / "pkg" / "b.py", "print('b')\n")
     m = build_manifest(tmp_path)
-    assert m["version"] == 1
+    assert m["version"] == 2
     assert "root_hash" in m
+    assert "tree" in m
     assert "a.py" in m["files"]
     assert "pkg/b.py" in m["files"]
 
@@ -92,3 +95,5 @@ def test_refresh_persists_stats_and_manifest(tmp_path: Path):
     loaded = load_index_stats(tmp_path)
     assert loaded is not None
     assert loaded.get("file_count", 0) >= 1
+    assert loaded.get("retrieval_mode") == "lexical"
+

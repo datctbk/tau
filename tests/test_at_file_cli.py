@@ -132,7 +132,7 @@ class TestAtFileExpansionEndToEnd:
 
         # Simulate what run_cmd produces:
         prompt = "@code.py\n\nreview this"
-        expanded, inlined = expand_at_files(prompt, str(tmp_path))
+        expanded, inlined, inlined_images = expand_at_files(prompt, str(tmp_path))
 
         assert len(inlined) == 1
         assert "def hello(): pass" in expanded
@@ -145,7 +145,7 @@ class TestAtFileExpansionEndToEnd:
         (tmp_path / "b.py").write_text("class B(A): pass\n")
 
         prompt = "@a.py @b.py\n\ncompare these"
-        expanded, inlined = expand_at_files(prompt, str(tmp_path))
+        expanded, inlined, inlined_images = expand_at_files(prompt, str(tmp_path))
 
         assert len(inlined) == 2
         assert "class A" in expanded
@@ -155,7 +155,7 @@ class TestAtFileExpansionEndToEnd:
         from tau.editor import expand_at_files
 
         prompt = "@nonexist.py\n\nreview this"
-        expanded, inlined = expand_at_files(prompt, str(tmp_path))
+        expanded, inlined, inlined_images = expand_at_files(prompt, str(tmp_path))
 
         assert len(inlined) == 0
         assert "@nonexist.py" in expanded
@@ -164,7 +164,7 @@ class TestAtFileExpansionEndToEnd:
         from tau.editor import expand_at_files
 
         prompt = "just a normal question"
-        expanded, inlined = expand_at_files(prompt, str(tmp_path))
+        expanded, inlined, inlined_images = expand_at_files(prompt, str(tmp_path))
 
         assert inlined == []
         assert expanded == prompt

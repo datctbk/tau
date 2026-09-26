@@ -28,7 +28,7 @@ class ToolPolicyHook(Protocol):
 
 
 class PolicyProfileEvaluator(Protocol):
-    def decide(self, *, profile: str, call: ToolCall) -> PolicyDecision: ...
+    def decide(self, *, profile: str, call: ToolCall, registry: ToolRegistry | None = None) -> PolicyDecision: ...
 
 
 class DefaultPolicyProfileEvaluator:
@@ -52,21 +52,27 @@ class DefaultPolicyProfileEvaluator:
         c = command.lower()
         return any(re.search(p, c) for p in risky)
 
-    def _classify_risk(self, call: ToolCall) -> str:
+    def _classify_risk(self, call: ToolCall, registry: ToolRegistry | None = None) -> str:
+        if registry:
+            try:
+                tool = registry.get(call.name)
+                if hasattr(tool, "risk") and tool.risk:
+                    return tool.risk
+            except Exception:
+                pass
+
         name = call.name
-        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls", "task_events", "task_list"}:
+        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls"} or name.startswith("codegraph_"):
             return "low"
-        if name in {"write_file", "edit_file", "task_update", "task_stop", "task_create"}:
+        if name in {"write_file", "edit_file"}:
             return "medium"
         if name == "run_bash":
             command = str(call.arguments.get("command", ""))
             return "high" if self._is_destructive_shell(command) else "medium"
-        if name in {"web_search", "web_fetch", "agent"}:
-            return "high"
         return "medium"
 
-    def decide(self, *, profile: str, call: ToolCall) -> PolicyDecision:
-        risk = self._classify_risk(call)
+    def decide(self, *, profile: str, call: ToolCall, registry: ToolRegistry | None = None) -> PolicyDecision:
+        risk = self._classify_risk(call, registry)
 
         if profile == "dev":
             return PolicyDecision(allow=True, requires_approval=False, risk=risk)
@@ -127,9 +133,36 @@ class DefaultToolPolicyHook:
         return bool(call.arguments.get("approved_risky_actions", False))
 
     def before_tool_call(self, *, agent: "Agent", call: ToolCall) -> PolicyDecision:
-        _ = agent
-        decision = self._evaluator.decide(profile=self._profile, call=call)
-        if decision.requires_approval and self._is_preapproved_upstream(call):
+        registry = getattr(agent, "_registry", getattr(agent, "registry", None)) if agent is not None else None
+        try:
+            decision = self._evaluator.decide(
+                profile=self._profile,
+                call=call,
+                registry=registry,
+            )
+        except TypeError:
+            decision = self._evaluator.decide(profile=self._profile, call=call)
+
+        is_preapproved_call = self._is_preapproved_upstream(call)
+        if is_preapproved_call and agent is not None:
+            agent.approved_risky_actions = True
+            if getattr(agent, "_config", None) is not None:
+                agent._config.approved_risky_actions = True
+
+        is_preapproved = (
+            is_preapproved_call or
+            (agent is not None and (
+                getattr(agent, "approved_risky_actions", False) or
+                (getattr(agent, "_config", None) is not None and getattr(agent._config, "approved_risky_actions", False))
+            ))
+        )
+
+        if decision.requires_approval and is_preapproved:
+            if call.name == "run_bash":
+                cmd = call.arguments.get("command")
+                if isinstance(cmd, str):
+                    from tau.tools.shell import mark_command_policy_approved
+                    mark_command_policy_approved(cmd)
             return PolicyDecision(
                 allow=decision.allow,
                 requires_approval=False,

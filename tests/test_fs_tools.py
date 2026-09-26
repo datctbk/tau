@@ -271,3 +271,79 @@ def test_ls_not_a_dir(workspace: Path):
     write_file("f.txt", "")
     with pytest.raises(NotADirectoryError):
         ls("f.txt")
+
+
+def test_fs_tools_ignores_internal_dirs(workspace: Path):
+    # Create matching patterns inside normal subpath and ignored subpaths
+    write_file("src/foo.py", "NFR requirements here")
+    write_file(".tau/sessions/session.json", "NFR requirements in session")
+    write_file("node_modules/pkg/index.js", "NFR requirements in node_modules")
+
+    # Verify find doesn't return files in ignored directories
+    found = find(".")
+    assert "src/foo.py" in found
+    assert ".tau/sessions/session.json" not in found
+    assert "node_modules/pkg/index.js" not in found
+
+    # Verify grep doesn't return matches in ignored directories
+    grep_res = grep("NFR", ".")
+    assert "src/foo.py" in grep_res
+    assert ".tau/sessions/session.json" not in grep_res
+    assert "node_modules/pkg/index.js" not in grep_res
+
+    # Verify search_files doesn't return matches in ignored directories
+    search_res = search_files("NFR", ".")
+    assert "src/foo.py" in search_res
+    assert "session.json" not in search_res
+    assert "index.js" not in search_res
+
+
+def test_grep_truncates_long_lines(workspace: Path):
+    # Create a giant line with the match at character 2000
+    prefix = "a" * 2000
+    giant_line = f"{prefix}MATCHPATTERN" + "b" * 2000 + "\n"
+    write_file("giant.txt", giant_line)
+
+    res = grep("MATCHPATTERN", ".")
+    assert "giant.txt" in res
+    assert "MATCHPATTERN" in res
+    assert "[line truncated: total 4,012 chars]" in res
+    assert len(res) < 1000
+
+
+def test_ignores_target_and_binary_files(workspace: Path):
+    # Setup files in target/ and with .class extension
+    target_class = workspace / "target" / "classes" / "com" / "acb" / "Foo.class"
+    target_class.parent.mkdir(parents=True, exist_ok=True)
+    target_class.write_bytes(b"\xca\xfe\xba\xbe\x00\x00\x00=\x00G\x07\x00\x02onboardingStatus\x00")
+
+    standalone_class = workspace / "Standalone.class"
+    standalone_class.write_bytes(b"\xca\xfe\xba\xbe\x00onboardingStatus\x00")
+
+    binary_no_ext = workspace / "bin_file"
+    binary_no_ext.write_bytes(b"hello\x00world\x00onboardingStatus")
+
+    src_java = workspace / "src" / "Foo.java"
+    src_java.parent.mkdir(parents=True, exist_ok=True)
+    src_java.write_text("public class Foo { String onboardingStatus; }", encoding="utf-8")
+
+    # Verify grep ignores target and binary files completely
+    grep_res = grep("onboardingStatus", ".")
+    assert "src/Foo.java" in grep_res
+    assert "target" not in grep_res
+    assert "Standalone.class" not in grep_res
+    assert "bin_file" not in grep_res
+    assert "\x00" not in grep_res
+
+    # Verify search_files also ignores them
+    search_res = search_files("onboardingStatus", ".")
+    assert "src/Foo.java" in search_res
+    assert "target" not in search_res
+    assert "Standalone.class" not in search_res
+    assert "bin_file" not in search_res
+    assert "\x00" not in search_res
+
+    # Verify read_file handles binary gracefully without dumping null bytes
+    read_res = read_file("Standalone.class")
+    assert "[Binary file cannot be displayed" in read_res
+

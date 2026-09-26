@@ -114,6 +114,23 @@ class _Theme:
 theme = _Theme()
 
 
+def _ascii_banner() -> str:
+    """Return startup ASCII banner for interactive REPL.
+
+    Disable by setting TAU_ASCII_BANNER=0|false|off|no.
+    """
+    raw = os.getenv("TAU_ASCII_BANNER", "1").strip().lower()
+    if raw in {"0", "false", "off", "no"}:
+        return ""
+    return (
+        r"  _______              " + "\n"
+        r" /_  __(_)___  __  __  " + "\n"
+        r"  / / / / __ \/ / / /  " + "\n"
+        r" / / / / /_/ / /_/ /   " + "\n"
+        r"/_/ /_/\____/\__,_/    "
+    )
+
+
 class _ThemeWatcher:
     """Background poller that hot-reloads the active theme when its source
     file changes on disk.
@@ -238,6 +255,7 @@ _AGENT_OPTIONS = [
     ),
     click.option("--topk", type=int, default=0, show_default=True, help="Top-k relevant memory entries to inject per turn (0 disables)."),
     click.option("--code-index/--no-code-index", "code_index", default=False, help="Inject Merkle code-index delta (changed files) into prompt context."),
+    click.option("--zip", "zip_mode", is_flag=True, default=False, help="Enable modern context compression (pre-prune + iterative + quality checks)."),
     click.option("--minimal", is_flag=True, default=False, help="Run with minimal core profile (disable optional capabilities/extensions)."),
     click.option(
         "--dynamic-prompt-builder/--no-dynamic-prompt-builder",
@@ -257,6 +275,7 @@ _AGENT_OPTIONS = [
             "Default follows config and is off unless enabled."
         ),
     ),
+    click.option("--aidlc", is_flag=True, default=False, help="Enable tau-aidlc behavior for this run."),
 ]
 
 def _agent_options(fn):
@@ -307,6 +326,7 @@ def _make_agent_config(
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     minimal: bool = False,
+    zip_mode: bool = False,
 ) -> AgentConfig:
     return _bootstrap_make_agent_config(
         tau_config=tau_config,
@@ -323,6 +343,7 @@ def _make_agent_config(
         dynamic_prompt_builder=dynamic_prompt_builder,
         prompt_budget=prompt_budget,
         minimal=minimal,
+        zip_mode=zip_mode,
     )
 
 # ---------------------------------------------------------------------------
@@ -2655,6 +2676,7 @@ def _repl(
             context=agent._context,
             steering=steering,
             console_print=console.print,
+            agent_config=agent_config,
         )
 
     import threading
@@ -2810,8 +2832,16 @@ def _repl(
         else f"{_ansi_fg(theme.system_color, dim=True)}Extensions: (none){_RESET}\n"
     )
 
+    banner = _ascii_banner()
+    banner_line = (
+        f"{_ansi_fg(theme.accent_color, bold=True)}{banner}{_RESET}\n"
+        if banner
+        else ""
+    )
+
     header = (
-        f"{_ansi_fg(theme.accent_color, bold=True)}tau v{_tau_version()}{_RESET}"
+        banner_line
+        + f"{_ansi_fg(theme.accent_color, bold=True)}tau v{_tau_version()}{_RESET}"
         f"  {_ansi_fg(theme.assistant_color)}{agent_config.provider}/{agent_config.model}{_RESET}"
         f"  {_ansi_fg(theme.system_color, dim=True)}·  exit or Ctrl-D to quit  ·  /help for commands{_RESET}\n"
         + loaded_line
@@ -3205,15 +3235,25 @@ def _repl(
 
         # new agent turn — expand @file references first
         ws = agent._config.workspace_root
-        expanded, inlined_files = expand_at_files(text, ws)
+        expanded, inlined_files, inlined_images = expand_at_files(text, ws)
         _flush_ext_status()
-        if inlined_files:
-            n = len(inlined_files)
-            names = ", ".join(Path(f).name for f in inlined_files)
+        if inlined_files or inlined_images:
+            n_files = len(inlined_files)
+            n_imgs = len(inlined_images)
+            parts = []
+            if n_files:
+                parts.append(f"{n_files} file{'s' if n_files > 1 else ''}")
+            if n_imgs:
+                parts.append(f"{n_imgs} image{'s' if n_imgs > 1 else ''}")
+            names = ", ".join(Path(f).name for f in (inlined_files + inlined_images))
             _append_output(f"\n{_ansi_fg(theme.accent_color, bold=True)}>{_RESET} {text}\n")
-            _append_output(f"{_ansi_fg(theme.system_color, dim=True)}  📎 {n} file{'s' if n > 1 else ''} inlined: {names}{_RESET}\n")
+            _append_output(f"{_ansi_fg(theme.system_color, dim=True)}  📎 {' and '.join(parts)} inlined: {names}{_RESET}\n")
             _append_output(f"{_ansi_fg(theme.system_color, dim=True)}{'─' * 60}{_RESET}\n")
             text = expanded
+            if inlined_images:
+                for img in inlined_images:
+                    if img not in _staged_images:
+                        _staged_images.append(img)
         else:
             _append_output(
                 f"\n{_ansi_fg(theme.accent_color, bold=True)}>{_RESET} {text}\n"
@@ -3540,9 +3580,11 @@ def run_cmd(
     tools_filter: str | None = None,
     topk: int = 0,
     code_index: bool = False,
+    zip_mode: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
+    aidlc: bool = False,
     prompt: str | None = None,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
@@ -3592,6 +3634,8 @@ def run_cmd(
             mode = "print"
 
     _setup_logging(verbose)
+    # Gate tau-aidlc behavior explicitly by CLI flag.
+    os.environ["TAU_AIDLC_ENABLED"] = "1" if aidlc else "0"
     # Resolve trace log path: flag without value → default in workspace
     if trace_log == "__default__":
         trace_log = str(Path(workspace).resolve() / "tau-trace.log")
@@ -3614,6 +3658,7 @@ def run_cmd(
         max_cost=max_cost,
         topk=topk,
         code_index=code_index,
+        zip_mode=zip_mode,
         dynamic_prompt_builder=dynamic_prompt_builder,
         minimal=minimal,
         prompt_budget=prompt_budget,
@@ -3667,7 +3712,9 @@ def run_cmd(
     # Expand @file references in the prompt (single-shot mode)
     if prompt_text:
         from tau.editor import expand_at_files
-        prompt_text, _inlined = expand_at_files(prompt_text, agent_config.workspace_root)
+        prompt_text, _inlined, _inlined_images = expand_at_files(prompt_text, agent_config.workspace_root)
+        if _inlined_images:
+            image = image + tuple(_inlined_images)
 
     if mode == "rpc":
         from tau.rpc import run_rpc
@@ -3788,6 +3835,7 @@ def sessions_fork(
     max_cost: float | None, no_session: bool,
     topk: int = 0,
     code_index: bool = False,
+    zip_mode: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
@@ -3823,6 +3871,7 @@ def sessions_fork(
             max_cost=max_cost,
             topk=topk,
             code_index=code_index,
+            zip_mode=zip_mode,
             dynamic_prompt_builder=dynamic_prompt_builder,
             minimal=minimal,
             prompt_budget=prompt_budget,
@@ -3901,6 +3950,7 @@ def sessions_import(
     trace_log: str | None,
     topk: int = 0,
     code_index: bool = False,
+    zip_mode: bool = False,
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
@@ -3949,6 +3999,7 @@ def sessions_import(
             max_cost=max_cost,
             topk=topk,
             code_index=code_index,
+            zip_mode=zip_mode,
             dynamic_prompt_builder=dynamic_prompt_builder,
             minimal=minimal,
             prompt_budget=prompt_budget,
@@ -4454,3 +4505,148 @@ def profile_cmd(mode: str, gateway_repo: str) -> None:
         f"[dim]Gateway entrypoint -> {installed_entry}[/dim]\n"
         "[dim]Activate: source ~/.tau/profiles/prod.env[/dim]"
     )
+
+
+# ---------------------------------------------------------------------------
+# `tau setup` — batch install/update ecosystem packages
+# ---------------------------------------------------------------------------
+_ECOSYSTEM_PACKAGES = [
+    ("tau-memory",    "https://github.com/datctbk/tau-memory",    "Persistent memory across sessions"),
+    ("tau-agents",    "https://github.com/datctbk/tau-agents",    "Multi-agent orchestration"),
+    ("tau-assistant", "https://github.com/datctbk/tau-assistant", "Personal assistant layer"),
+    ("tau-gateway",   "https://github.com/datctbk/tau-gateway",   "Multi-platform messaging gateway"),
+    ("tau-web",       "https://github.com/datctbk/tau-web",       "Web fetch & search tools"),
+    ("tau-aidlc",     "https://github.com/datctbk/tau-aidlc",     "AI-DLC lifecycle extension"),
+    ("tau-storm",     "https://github.com/datctbk/tau-storm",     "Deep research extension using the STORM algorithm"),
+]
+
+
+@main.command("setup")
+@click.option("--list", "list_only", is_flag=True, default=False, help="Show packages without installing.")
+@click.option("--minimal", is_flag=True, default=False, help="Skip ecosystem packages (verify core only).")
+@click.option("--update", is_flag=True, default=False, help="Update already-installed packages.")
+def setup_cmd(list_only: bool, minimal: bool, update: bool) -> None:
+    """Install or update all official tau ecosystem packages.
+
+    \b
+    Examples:
+      tau setup              install all recommended packages
+      tau setup --list       show what would be installed
+      tau setup --update     update already-installed packages
+      tau setup --minimal    verify core only, skip ecosystem
+    """
+    ensure_tau_home()
+    from tau.packages import PackageManager, PackageError, PackageAlreadyInstalledError
+
+    pm = PackageManager()
+    installed = {p.name for p in pm.list_packages()}
+
+    if list_only:
+        console.print()
+        console.print(Rule("tau ecosystem packages", style="dim"))
+        console.print()
+        console.print(f"[bold]{'PACKAGE':<20} {'STATUS':<14} {'DESCRIPTION'}[/bold]")
+        console.print(Rule(style="dim"))
+        for name, url, desc in _ECOSYSTEM_PACKAGES:
+            normalised = name.replace("-", "_").lower()
+            status = "[green]installed[/green]" if normalised in installed else "[dim]not installed[/dim]"
+            console.print(Text.assemble(
+                (f"  {name:<20}", Style(color="cyan", bold=True)),
+                ("", ""),
+            ), end="")
+            console.print(f"{status}  [dim]{desc}[/dim]")
+        console.print()
+        console.print(
+            "[dim]  Run [bold]tau setup[/bold] to install all, "
+            "or [bold]tau extensions install git:<url>[/bold] for individual packages.[/dim]"
+        )
+        console.print()
+        return
+
+    if minimal:
+        console.print("[green]  ✓  tau core is ready.[/green]")
+        console.print("[dim]  Run [bold]tau setup[/bold] (without --minimal) to install ecosystem packages.[/dim]")
+        return
+
+    console.print()
+    console.print(Rule("tau setup", style="dim"))
+    console.print()
+
+    success_count = 0
+    skip_count = 0
+    fail_count = 0
+
+    for name, url, desc in _ECOSYSTEM_PACKAGES:
+        normalised = name.replace("-", "_").lower()
+
+        if normalised in installed:
+            if update:
+                try:
+                    pm.update(normalised)
+                    console.print(Text.assemble(
+                        ("  ↻ ", Style(color="blue", bold=True)),
+                        ("updated ", Style(color="blue")),
+                        (name, Style(color="cyan", bold=True)),
+                    ))
+                    success_count += 1
+                except PackageError as exc:
+                    console.print(Text.assemble(
+                        ("  ✗ ", Style(color="red", bold=True)),
+                        (f"update failed: {name} — {exc}", Style(color="red")),
+                    ))
+                    fail_count += 1
+            else:
+                console.print(Text.assemble(
+                    ("  • ", Style(dim=True)),
+                    (name, Style(color="cyan")),
+                    ("  already installed", Style(dim=True)),
+                ))
+                skip_count += 1
+            continue
+
+        # Install
+        source = f"git:{url}"
+        try:
+            pkg = pm.install(source)
+            console.print(Text.assemble(
+                ("  ✓ ", Style(color="green", bold=True)),
+                ("installed ", Style(color="green")),
+                (name, Style(color="cyan", bold=True)),
+                (f"  ({pkg.version})", Style(dim=True)),
+            ))
+            success_count += 1
+        except PackageAlreadyInstalledError:
+            console.print(Text.assemble(
+                ("  • ", Style(dim=True)),
+                (name, Style(color="cyan")),
+                ("  already installed", Style(dim=True)),
+            ))
+            skip_count += 1
+        except PackageError as exc:
+            console.print(Text.assemble(
+                ("  ✗ ", Style(color="red", bold=True)),
+                (f"failed: {name} — {exc}", Style(color="red")),
+            ))
+            fail_count += 1
+
+    # Summary
+    console.print()
+    parts = []
+    if success_count:
+        parts.append(f"[green]{success_count} installed/updated[/green]")
+    if skip_count:
+        parts.append(f"[dim]{skip_count} already installed[/dim]")
+    if fail_count:
+        parts.append(f"[red]{fail_count} failed[/red]")
+    console.print(f"  {', '.join(parts)}")
+    console.print()
+
+    if fail_count:
+        console.print(
+            "[yellow]  ⚠ Some packages failed to install. "
+            "Check your network connection and try again.[/yellow]"
+        )
+    else:
+        console.print("[green]  ✓  tau ecosystem setup complete![/green]")
+    console.print()
+

@@ -60,6 +60,7 @@ class OllamaProviderConfig(BaseSettings):
 
 class UnslothProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="UNSLOTH_")
+    api_key: str = "sk-tau-internal-secret"
     base_url: str = "http://localhost:8001/v1"
     timeout_seconds: float = 2*60.0
     # Streaming read timeout in seconds. <= 0 disables read timeout
@@ -253,6 +254,8 @@ class ToolsConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TAU_TOOLS_")
     disabled: list[str] = []      # tool names to disable, e.g. ["run_bash"]
     enabled_only: list[str] = []  # if non-empty, ONLY these tools are registered
+    max_result_chars: int = 16000 # maximum chars for any tool output (0 = unlimited)
+
 
 
 class PricingConfig(BaseSettings):
@@ -280,11 +283,11 @@ class TauConfig(BaseSettings):
 
     provider: str = "openai"
     model: str = "gpt-4o"
-    max_tokens: int = 6144 * 18
-    max_turns: int = 20
+    max_tokens: int = 6144 * 21
+    max_turns: int = 45
     trim_strategy: str = "sliding_window"
     compaction_enabled: bool = True
-    compaction_threshold: float = 0.60
+    compaction_threshold: float = 0.750
     system_prompt: str = (
         "You are tau, a minimal CLI coding agent. "
         "Use the available tools to help the user with coding tasks. "
@@ -301,6 +304,9 @@ class TauConfig(BaseSettings):
     prompt_budget_output_reserve: int = 1000
     prompt_budget_max_tools_total: int = 12
     dynamic_prompt_builder_enabled: bool = False
+    semantic_retrieval: bool = False
+    semantic_embeddings_enabled: bool = False
+    semantic_vector_index_enabled: bool = False
 
     # provider sub-configs
     openai: OpenAIProviderConfig = OpenAIProviderConfig()
