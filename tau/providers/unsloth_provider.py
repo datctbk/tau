@@ -147,7 +147,11 @@ class UnslothProvider:
     def __init__(self, config: TauConfig, agent_config: AgentConfig) -> None:
         self._agent_config = agent_config
         self._model = agent_config.model
-        self._base_url = config.unsloth.base_url.rstrip("/")
+        raw_base_url = os.environ.get("UNSLOTH_BASE_URL") or config.unsloth.base_url
+        base_url = raw_base_url.rstrip("/")
+        if base_url.startswith("http://localhost:"):
+            base_url = base_url.replace("http://localhost:", "http://127.0.0.1:", 1)
+        self._base_url = base_url
         timeout_s = max(5.0, float(config.unsloth.timeout_seconds))
         stream_read_timeout_s = float(getattr(config.unsloth, "stream_read_timeout_seconds", 30.0))
 
@@ -210,6 +214,9 @@ class UnslothProvider:
         max_tokens = getattr(self._agent_config, "max_tokens", None)
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if getattr(self._agent_config, "thinking_level", None) == "off":
+            payload["enable_thinking"] = False
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         if oai_tools:
             payload["tools"] = oai_tools
 
@@ -260,9 +267,12 @@ class UnslothProvider:
                 self._last_response_headers = dict(resp.headers)
                 resp.raise_for_status()
                 for line in resp.iter_lines():
-                    if not line or not line.startswith("data: "):
+                    if not line:
                         continue
-                    data_str = line[6:].strip()
+                    line_str = line.strip()
+                    if not line_str.startswith("data:"):
+                        continue
+                    data_str = line_str[5:].strip()
                     if data_str == "[DONE]":
                         break
                     try:

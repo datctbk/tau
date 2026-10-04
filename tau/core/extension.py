@@ -201,6 +201,8 @@ class ExtensionContext:
         workspace: str | None = None,
         session_name: str | None = None,
         max_turns: int | None = None,
+        max_tokens: int | None = None,
+        thinking_level: str | None = None,
         load_skills: bool = False,
         load_extensions: bool = False,
         load_context_files: bool = False,
@@ -244,10 +246,21 @@ class ExtensionContext:
         if session_name is not None:
             child_kwargs["session_name"] = session_name
 
+        config = AgentConfig()
+        if parent is not None:
+            config.thinking_level = parent.thinking_level
+            config.provider = parent.provider
+            config.model = parent.model
+            config.workspace_root = parent.workspace_root
+            if getattr(parent, "max_tokens", None) is not None:
+                config.max_tokens = parent.max_tokens
         if max_turns is not None:
-            config = AgentConfig()
             config.max_turns = max_turns
-            child_kwargs["config"] = config
+        if max_tokens is not None:
+            config.max_tokens = max_tokens
+        if thinking_level is not None:
+            config.thinking_level = thinking_level
+        child_kwargs["config"] = config
 
         if allowed_tools is not None:
             child_kwargs["allowed_tools"] = allowed_tools
