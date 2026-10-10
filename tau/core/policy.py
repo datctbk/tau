@@ -6,6 +6,7 @@ Phase A goal: provide a stable hook point without changing default behavior.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import re
 from typing import TYPE_CHECKING, Protocol
 
@@ -31,6 +32,32 @@ class PolicyProfileEvaluator(Protocol):
     def decide(self, *, profile: str, call: ToolCall, registry: ToolRegistry | None = None) -> PolicyDecision: ...
 
 
+def _should_confirm_codegraph() -> bool:
+    """Check if codegraph tools require user confirmation.
+
+    If False: auto-allowed (low risk, no confirmation prompt).
+    If True: requires confirmation (medium risk, asks allow? [y/N]).
+    """
+    raw = os.getenv("TAU_CONFIRM_CODEGRAPH")
+    if raw is not None:
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    try:
+        from pathlib import Path
+        import tomllib
+        cfg_file = Path.home() / ".tau" / "config.toml"
+        if cfg_file.is_file():
+            with open(cfg_file, "rb") as f:
+                data = tomllib.load(f)
+            for sec in ("policy", "tools", "codegraph", "defaults"):
+                if sec in data and "confirm_codegraph" in data[sec]:
+                    return bool(data[sec]["confirm_codegraph"])
+    except Exception:
+        pass
+
+    return False
+
+
 class DefaultPolicyProfileEvaluator:
     """Built-in profile evaluator kept inside core (no extension coupling)."""
 
@@ -54,7 +81,9 @@ class DefaultPolicyProfileEvaluator:
 
     def _classify_risk(self, call: ToolCall, registry: ToolRegistry | None = None) -> str:
         name = call.name
-        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls"} or name.startswith("codegraph_"):
+        if name.startswith("codegraph_"):
+            return "medium" if _should_confirm_codegraph() else "low"
+        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls"}:
             return "low"
 
         if registry:

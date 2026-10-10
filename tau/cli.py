@@ -275,6 +275,12 @@ _AGENT_OPTIONS = [
             "Default follows config and is off unless enabled."
         ),
     ),
+    click.option(
+        "--confirm-codegraph/--no-confirm-codegraph",
+        "confirm_codegraph",
+        default=None,
+        help="Require user confirmation before executing codegraph tools (default: false).",
+    ),
     click.option("--aidlc", is_flag=True, default=False, help="Enable tau-aidlc behavior for this run."),
 ]
 
@@ -3585,6 +3591,7 @@ def run_cmd(
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
     aidlc: bool = False,
+    confirm_codegraph: bool | None = None,
     prompt: str | None = None,
 ) -> None:
     """Run the agent (REPL if no PROMPT given, single-shot otherwise)."""
@@ -3636,6 +3643,8 @@ def run_cmd(
     _setup_logging(verbose)
     # Gate tau-aidlc behavior explicitly by CLI flag.
     os.environ["TAU_AIDLC_ENABLED"] = "1" if aidlc else "0"
+    if confirm_codegraph is not None:
+        os.environ["TAU_CONFIRM_CODEGRAPH"] = "1" if confirm_codegraph else "0"
     # Resolve trace log path: flag without value → default in workspace
     if trace_log == "__default__":
         trace_log = str(Path(workspace).resolve() / "tau-trace.log")
@@ -3839,6 +3848,7 @@ def sessions_fork(
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
+    **kwargs: Any,
 ) -> None:
     from tau.core.session import local_sessions_dir
     sm = SessionManager(sessions_dir=local_sessions_dir(workspace))
@@ -3954,6 +3964,7 @@ def sessions_import(
     minimal: bool = False,
     dynamic_prompt_builder: bool | None = None,
     prompt_budget: bool | None = None,
+    **kwargs: Any,
 ) -> None:
     """Import a previously-exported JSON session file."""
     import uuid
