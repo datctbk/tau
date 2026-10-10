@@ -53,6 +53,10 @@ class DefaultPolicyProfileEvaluator:
         return any(re.search(p, c) for p in risky)
 
     def _classify_risk(self, call: ToolCall, registry: ToolRegistry | None = None) -> str:
+        name = call.name
+        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls"} or name.startswith("codegraph_"):
+            return "low"
+
         if registry:
             try:
                 tool = registry.get(call.name)
@@ -60,10 +64,6 @@ class DefaultPolicyProfileEvaluator:
                     return tool.risk
             except Exception:
                 pass
-
-        name = call.name
-        if name in {"read_file", "list_dir", "search_files", "grep", "find", "ls"} or name.startswith("codegraph_"):
-            return "low"
         if name in {"write_file", "edit_file"}:
             return "medium"
         if name == "run_bash":
