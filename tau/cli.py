@@ -2633,16 +2633,33 @@ def _handle_slash(
             _print("[dim]  /prompt requires an active session.[/dim]")
             return True
         # Parse: /prompt <name> [key=value key=value ...]
-        prompt_parts = arg.split()
+        import shlex
+        from tau.prompts import resolve_template, parse_var_args, load_template, extract_variables
+        try:
+            prompt_parts = shlex.split(arg)
+        except ValueError:
+            prompt_parts = arg.split()
         tmpl_name = prompt_parts[0]
         var_pairs = prompt_parts[1:]
-        from tau.prompts import resolve_template, parse_var_args
-        try:
-            variables = parse_var_args(var_pairs)
-        except ValueError as e:
-            _print(f"[red]  ✗ {e}[/red]")
-            return True
         ws = agent._config.workspace_root
+        variables = {}
+        if var_pairs:
+            try:
+                variables = parse_var_args(var_pairs)
+            except ValueError as e:
+                tmpl_content = load_template(tmpl_name, ws)
+                vars_in_tmpl = extract_variables(tmpl_content) if tmpl_content else []
+                if len(vars_in_tmpl) == 1:
+                    single_var = vars_in_tmpl[0]
+                    rest = arg[len(tmpl_name):].strip()
+                    if rest.startswith(f"{single_var}="):
+                        rest = rest[len(single_var) + 1:].strip()
+                    if (rest.startswith('"') and rest.endswith('"')) or (rest.startswith("'") and rest.endswith("'")):
+                        rest = rest[1:-1]
+                    variables = {single_var: rest}
+                else:
+                    _print(f"[red]  ✗ {e}[/red]")
+                    return True
         result = resolve_template(tmpl_name, ws, variables)
         if result is None:
             _print(f"[red]  ✗ Template {tmpl_name!r} not found.[/red]")

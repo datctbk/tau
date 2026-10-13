@@ -26,6 +26,14 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def isolate_tau_home(tmp_path, monkeypatch):
+    import tau.prompts as mod
+    fake_home = tmp_path / "fake_tau_home"
+    monkeypatch.setattr(mod, "TAU_HOME", fake_home)
+
+
+
 # ===========================================================================
 # extract_variables
 # ===========================================================================
